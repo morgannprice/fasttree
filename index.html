@@ -1,0 +1,719 @@
+<HTML>
+<HEAD>
+<TITLE>FastTree 2.1: Approximately-Maximum-Likelihood Trees for Large Alignments</TITLE>
+
+</HEAD>
+<BODY>
+
+<H2>FastTree 2.1: Approximately-Maximum-Likelihood Trees for Large Alignments</H2>
+
+<P>FastTree infers approximately-maximum-likelihood phylogenetic trees from alignments of nucleotide or protein sequences.
+FastTree can handle alignments with up to a million of sequences in a reasonable amount of time and memory.
+For large alignments, FastTree is 100-1,000 times faster than
+<A HREF="http://www.atgc-montpellier.fr/phyml/">PhyML 3.0</A> or
+<A HREF="https://cme.h-its.org/exelixis/web/software/raxml/">RAxML 7</A>.
+FastTree is open-source software -- you can download the code <A HREF="#Install">below</A>.
+</P>
+
+<P>FastTree is more accurate than PhyML 3 with default settings,
+and much more accurate than the distance-matrix methods that are traditionally used
+for large alignments.
+FastTree uses the Jukes-Cantor or <A HREF="http://en.wikipedia.org/wiki/Substitution_model#GTR:_Generalised_time_reversible">generalized time-reversible</A> (GTR) models of nucleotide evolution and the JTT (<A HREF="http://www.ncbi.nlm.nih.gov/pubmed/1633570">Jones-Taylor-Thornton 1992</A>), WAG (<A HREF="http://www.ncbi.nlm.nih.gov/pubmed/11319253">Whelan & Goldman 2001</A>), or LG (<A HREF="https://pubmed.ncbi.nlm.nih.gov/18367465/">Le and Gascuel 2008</A>) models of amino acid evolution. To account for the varying rates of evolution across sites,
+FastTree uses a single rate for each site (the <A HREF="https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=1639535&tag=1">"CAT"</A> approximation).
+To quickly estimate the reliability of each split in the tree, FastTree computes
+<A HREF="#Support">local support values</A> with the
+<A HREF="http://mbe.oxfordjournals.org/cgi/reprint/16/8/1114">Shimodaira-Hasegawa test</A> (these are the same as PhyML 3's <A HREF="http://www.ncbi.nlm.nih.gov/pubmed/19378142">"SH-like local supports"</A>).
+</P>
+
+<P>More information:</P>
+
+<UL>
+<LI><A HREF="#How">How it Works</A></LI>
+<LI><A HREF="#Install"><B>Install FastTree</B></A></LI>
+<LI><A HREF="#Usage">Running FastTree</A></LI>
+<LI><A HREF="#Performance">Speed</A> and <A HREF="#Accuracy">Accuracy</A></LI>
+<LI>Special features:
+<UL>
+<LI><A HREF="#Gamma20">CAT/Gamma20 branch lengths and likelihoods</A></LI>
+<LI><A HREF="#OpenMP">Multi-threaded FastTree with OpenMP</A></LI>
+<LI><A HREF="#Matrix">Modifying the transition matrix</A>
+</UL></LI>
+<LI><A HREF="#FAQ">Frequently Asked Questions</A></LI>
+<LI><A HREF="#Contact">Contact us</A></LI>
+</UL>
+
+<P>These papers describe FastTree: the first paper describes FastTree 1.0, and the second paper describes heuristic minimum-evolution SPR moves, maximum-likelihood NNIs, and SH-like local supports. We have also eliminated the O(N<sup>2</sup>) steps in the neighbor-joining phase,
+and implemented maximum-likelihood NNI moves and SH-like supports (see the <A HREF="ChangeLog">ChangeLog</A>).
+<UL>
+<LI>Price, M.N., Dehal, P.S., and Arkin, A.P. (2009) <B>FastTree: Computing Large Minimum-Evolution Trees with Profiles instead of a Distance Matrix.</B> Molecular Biology and Evolution 26:1641-1650, doi:10.1093/molbev/msp077. <A HREF="https://pmc.ncbi.nlm.nih.gov/articles/PMC2693737/">link</A>
+</LI>
+<LI>Price, M.N., Dehal, P.S., and Arkin, A.P. (2010) <B>FastTree 2 -- Approximately Maximum-Likelihood Trees for Large Alignments</B>. PLoS ONE, 5(3):e9490. doi:10.1371/journal.pone.0009490. <A HREF="http://www.plosone.org/article/info%3Adoi%2F10.1371%2Fjournal.pone.0009490">link</A>
+</LI>
+</UL>
+
+<H3><A NAME="How">How it Works</A></H3>
+
+FastTree has five stages:
+<UL>
+<LI><A HREF="#NJ">Heuristic neighbor-joining</A></LI>
+<LI><A HREF="#MinEvo">Reducing the length of the tree:</A>
+<UL><LI>Nearest-neighbor interchanges</LI>
+<LI>Subtree-prune-regraft moves</LI>
+<LI><A HREF="#Distance">Distance model</A></LI></UL>
+<LI><A HREF="#ML">Maximizing the tree's likelihood with NNIs</A></LI>
+<LI><A HREF="#Support">Local support values</A></LI>
+</UL>
+
+<H3><A NAME="NJ">Heuristic Neighbor-Joining</A></H3>
+
+<P>First, FastTree uses a heuristic variant of 
+<A HREF="http://en.wikipedia.org/wiki/Neighbor_joining">neighbor joining</A>
+to get a rough topology.
+During neighbor joining, FastTree stores profiles of internal nodes instead of a distance matrix,
+which reduces the memory required.
+FastTree uses a combination of three heuristics to speed up this phase:
+it remembers the best join for each node, as in 
+<A HREF="http://www.nada.kth.se/~isaac/publications/fast_neighbor_joining.html">fast neighbor-joining</A>;
+it does a hill-climbing search for better joins from a candidate join, as in
+<A HREF="http://www.ncbi.nlm.nih.gov/pubmed/16752216">relaxed neighbor joining</A>;
+and it uses the "top hits" heuristic to avoid computing all pairwise distances
+and to avoid considering all possible joins at every step.
+It also updates the best join for a node as it comes across them, which reduces
+the amount of hill-climbing.
+Another limitation of FastTree's neighbor-joining phase is that it does not correct the distances
+for multiple substitutions, which exacerbates long-branch attraction.
+However, this will be corrected in the next stage.</P>
+
+<H3><A NAME="MinEvo">Minimum Evolution</A></H3>
+
+<P>FastTree then tries to reduce the length of the tree,
+using a mix of
+<A HREF="http://www.hyphy.org/docs/analyses/methods/nni.html">nearest-neighbor interchanges</A> (NNIs)
+and
+<A HREF="http://www.hyphy.org/docs/analyses/methods/spr.html">subtree-prune-regraft moves</A> (SPRs).
+These "balanced minimum-evolution" rearrangements are roughly the same as what
+<A HREF="http://atgc.lirmm.fr/fastme/">FastME</A> does, but because FastTree uses profiles instead of distances,
+it is much faster.
+By default, FastTree uses 4*log<sub>2</sub>(N) rounds of nearest-neighbor interchanges and 2 rounds of subtree-prune-regraft
+moves.
+In each round, it considers every possible NNI in the tree.
+Because there are too many (O(N<sup>2</sup>)) possible SPR moves, FastTree
+treats SPR moves as chains of NNIs and only extends
+the best choice in the chain for chains of length two or greater.
+In the minimum-evolution framework, if the distances are not too noisy,
+NNI and SPR moves suffice to reach optimal trees
+(<A HREF="http://www.ncbi.nlm.nih.gov/pubmed/14694080">Desper & Gascuel 2004</A>, <A HREF="http://www.ncbi.nlm.nih.gov/pubmed/19179704">Bordewich et al. 2009</A>).
+</P>
+
+<P><A NAME="Distance"><i>Distances:</i></A> During these minimum evolution steps, FastTree needs to estimate distances between sequences or profiles.
+For protein sequences, FastTree
+estimates distances by using the BLOSUM45 amino acid similarity
+matrix, and it corrects for multiple substitutions by using the
+formula -1.3 * log(1-d), where d is weighted so that random sequences
+have an average value of 1.  For nucleotide sequences, FastTree
+uses the Jukes-Cantor distance -0.75*log(1 - 4/3 d), where d is the
+proportion of positions that differ. When comparing two sequences, positions
+with gaps are ignored; when comparing two profiles, positions are weighted by
+their proportions of non-gaps.
+</P>
+
+<H3><A NAME="ML">Maximizing the tree's likelihood</A></H3>
+
+<P>FastTree further improves the tree -- both the topology and the branch lengths --
+with maximum-likelihood rearrangements.
+FastTree uses the Jukes-Cantor or generalized time-reversible models of nucleotide evolution or the JTT (Jones-Taylor-Thorton), WAG (Whelan Goldman), or LG (Le-Gascuel) models of amino acid evolution. By default, FastTree accounts for variable rates of evolution across sites by assigning each site to one of 20 categories, with the rates geometrically spaced from 0.05 to 20.
+FastTree sets each site to its most likely category by using a Bayesian approach with a gamma prior.
+This prevents overfitting on small alignments.</P>
+
+<P>FastTree's search for a more likely topology is similar to <A HREF="https://cme.h-its.org/exelixis/web/software/raxml/">RAxML's</A> local hill-climbing, but FastTree is much faster because:
+<UL>
+<LI>FastTree considers only NNIs, not SPR moves.</LI>
+<LI>FastTree maintains only one topology at a time.</LI>
+<LI>FastTree optimizes site rate categories and any model parameters (e.g. for the GTR model of nucleotide evolution) just once, instead of after each round of NNIs.</LI>
+<LI>FastTree does not use a separate step to optimize branch lengths between rounds of NNIs.</LI>
+<LI>FastTree only optimizes each individual branch length to an accuracy of 0.0001 or 0.1% of the branch length, whichever is greater. (For more accurate branch lengths, see <A HREF="#BranchLen">here</A>.)</LI>
+<LI>FastTree maximizes the likelihood of a quartet by optimizing the 5 branch lengths in turn, but it only does this for 2 rounds, and topologies that are significantly (5 log-likelihood units) worse are abandoned after the first round.</LI>
+<LI>FastTree does not traverse into subtrees that have not seen any significant improvement in likelihood (&ge; 0.1 log likelihood units) in either of the previous two rounds. Before skipping a subtree, FastTree also checks that the common ancestor's sibling and uncle were not affected by any significant NNI in the previous round.</LI>
+<LI>If the split was unchanged in the last round of NNIs and the current topology is significantly (5 log-likelihood units) more likely than the star topology then FastTree does not consider alternate topologies.</LI>
+<LI>FastTree limits the number of rounds of NNIs (default: 2*log<sub>2</sub>(N) rounds) to ensure a predictable running time. However, FastTree normally converges before reaching this limit.</LI>
+</UL>
+</P>
+
+<H3><A NAME="Support">Local support values</H3>
+
+<P>To quickly estimate the reliability of each split in the tree, FastTree uses the Shimodaira-Hasegawa test on the three alternate topologies (NNIs) around that split.
+Specifically, given a topology (A,B),(C,D), where A, B, C, D may be subtrees rather than leaves,
+FastTree uses the SH test to compare (A,B),(C,D) to alternate topologies (A,C),(B,D) or (A,D),(B,C).
+Although FastTree uses the CAT approximation and does not fully optimize the branch lengths, the resulting support values are virtually identical to PhyML 3's "SH-like local supports." Both FastTree and PhyML3 use 1,000 resamples and do not reoptimize the branch lengths for the resampled alignments.
+</P>
+
+<P>If you want to use the traditional bootstrap instead, you can use
+phylip's
+<A HREF="https://phylipweb.github.io/phylip/doc/seqboot.html">SEQBOOT</A>
+to generate resampled alignments, the -n option to FastTree to
+analyze all of the resampled alignments with one command, and
+<A HREF="treecmp.html">CompareToBootstrap.pl</A> (included in this
+repository) to compare the original tree to the resampled trees.  For
+alignments with thousands or tens of thousands of sequences, we
+recommend using the tree for the full alignment as the starting tree
+for each resampled replicate (the -intree1 option). This "fast global"
+bootstrap is quite fast and accurate -- for an alignment of 40,000 ABC
+transporters, 100 fast-global bootstraps took just 20 hours, and the
+resulting support values were strongly correlated with the traditional
+bootstrap (<em>r</em>=0.975). (Note -- this analysis was performed
+with FastTree 1.1, before we implemented maximum-likelihood NNIs.)
+</P>
+
+<P>Earlier versions of FastTree used the local bootstrap and the minimum-evolution
+criterion to get a fast estimate of
+which splits in the tree are reliable. FastTree will still do this if you turn off the maximum-likelihood phase (-noml).
+</P>
+
+
+<H3><A NAME="Install">Downloading and Installing FastTree</A></H3>
+
+<P>FastTree 2.1.11 is available as</P>
+
+<UL>
+<LI><A HREF="FastTree">Linux 64-bit executable (+SSE)</A>
+<UL>
+<LI><A HREF="FastTreeDbl">Double-precision executable</A> for nearly-identical sequences (see <A HREF="#BranchLen">explanation</A>)</LI>
+<LI><A HREF="FastTreeMP">Multi-threaded executable (+SSE +OpenMP)</A> (see <A HREF="#OpenMP">usage guide)</LI>
+</UL>
+</LI>
+<LI><A HREF="FastTree.exe">Windows command-line executable (no SSE)</A></LI>
+<LI><A HREF="FastTree.c">C code</A></LI>
+</UL>
+
+If you use a Mac or other platform not included above, download <A HREF="FastTree.c">FastTree.c</A> and run
+<pre>gcc -O3 -finline-functions -funroll-loops -Wall -o FastTree FastTree.c -lm</pre>
+
+(<A HREF="http://gcc.gnu.org/">gcc</A> is installed on many Mac OS X and Unix machines. If you use a Mac, you may need to install it from
+<A HREF="http://developer.apple.com/xcode/">xcode</A>. gcc is also available for virtually every platform.) Note that FastTree will try to use <A HREF="http://en.wikipedia.org/wiki/SSE3">SSE2/SSE3</A> instructions to speed up some inner loops. This will not work on many Windows or Mac machines. If FastTree will not run, then try compiling it with this command instead:
+
+<pre>gcc -DNO_SSE -O3 -finline-functions -funroll-loops -Wall -o FastTree FastTree.c -lm</pre>
+
+We have also heard that the -finline-functions option can cause an error. You can omit this option.
+
+<P>If you want to build the multi-threaded "FastTreeMP," use
+
+<pre>gcc -DOPENMP -fopenmp -O3 -finline-functions -funroll-loops -Wall -o FastTreeMP FastTree.c -lm</pre>
+
+(The OpenMP version may not compile on some versions of Mac OS X unless you install a different version of gcc.) See <A HREF="#OpenMP">here</A> for more information about using FastTreeMP</A>.
+
+<P>FastTree is open source software -- you are free to modify and redistribute it as you wish. If you do make any improvements to FastTree, please <A HREF="mailto:fasttree@microbesonline.org">send them to us</A> so we can incorporate your changes into the main version.</P>
+
+<P>Old versions: see <A HREF="ChangeLog.txt">Change log</A> or <A HREF="old">old versions of the code</A>.
+
+<H3><A NAME="Usage">Running FastTree</A></H3>
+
+<P>To infer a tree for a protein alignment with the JTT+CAT model, use
+<pre>FastTree < alignment_file > tree_file </pre>
+or
+<pre>FastTree alignment.file > tree_file </pre>
+</P>
+
+<P>Use the <B>-wag</B> or <B>-lg</B> options to use the WAG+CAT or LG+CAT model instead. You can also use your own
+<A HREF="#Matrix">transition matrix</A></P>
+
+<P>To infer a tree for a nucleotide alignment with the GTR+CAT model, use
+<pre>FastTree -gtr -nt < alignment.file > tree_file </pre>
+or
+<pre>FastTree -gtr -nt alignment_file > tree_file </pre>
+If you do not specify <B>-gtr</B>, then FastTree will use the Jukes-Cantor + CAT model instead.
+</P>
+
+<P>Use the <B>-gamma</B> option (about 5% slower) if you want to rescale the branch lengths and compute a Gamma20-based likelihood.
+Gamma likelihoods are more comparable
+across runs. These also allow for statistical comparisons of the likelihood of different topologies
+if you use the <B>-log logfile</B> option
+(see  <A HREF="#CompareLk">details</A>).
+The change in the scale of the tree is usually modest (10% or less).
+</P>
+
+<P>If you are using Windows, run FastTree within the command-line environment (use Start / Run / "cmd"). If you are using MacOS or Linux, you may need to specify the path of the executable by using "./FastTree" rather than "FastTree".</P>
+
+<P>To see what version of FastTree you have and for information on FastTree's options, run FastTree without any arguments or with the <B>-help</B> option.</P>
+
+<P><b>Input formats</b>: FastTree reads <A
+HREF="http://en.wikipedia.org/wiki/Multiple_sequence_alignment">multiple
+sequence alignments</A> in <A
+HREF="http://en.wikipedia.org/wiki/FASTA_format">fasta format</A> or
+in interleaved <A HREF="https://en.wikipedia.org/wiki/PHYLIP">phylip</A>
+format.
+
+<UL>
+<LI> If
+the sequences' names are not unique, then FastTree returns an
+error.</LI>
+<LI> Please make sure that the none of the characters ":,()"
+appear in your sequence names or you will not be able to parse the resulting tree.</LI>
+<LI>Fasta format:</LI>
+<UL>
+<LI> By default, any text
+after the first space on a description line will be treated as a
+comment and will be ignored. For example, the line ">Ecoli arcA protein" is treated as
+introducing a sequence named "Ecoli". Use the -quote option to change this behavior, or replace spaces with underscores.</LI>
+<LI>Each description line must be under 5,000 characters long, but sequence lines can be any length.</LI>
+</UL>
+<LI>Phylip interleaved format:</LI>
+<UL>
+<LI>FastTree allows names of any length in phylip files and requires space(s) between the sequence's name and the sequence.</LI>
+<LI>If you repeat the names of the sequences in succeeding blocks, then the names must match the first block.</LI>
+<LI>If you do not repeat the names of the sequences in succeeding blocks, then those lines must begin with space(s).</LI>
+<LI>Each line must be less than 5,000 characters. Longer alignments must be broken up into blocks. (Or use FASTA format: FastTree allows arbitrarily long sequence lines in FASTA format).</LI>
+<LI>FastTree can read multiple alignments in a single file in phylip
+format, such as resampled alignments from <A
+HREF="http://evolution.genetics.washington.edu/phylip/doc/seqboot.html">SEQBOOT</A>,
+but you need to tell it how many alignments to expect with the -n
+option.</LI>
+</UL>
+</UL>
+</P>
+
+<P><b>Output formats:</b> FastTree outputs trees in <A HREF="http://en.wikipedia.org/wiki/Newick_format">Newick format</A>. The placement of the root
+is not biologically meaningful.  The local support values are given as names for the internal nodes, and
+range from 0 to 1, not from 0 to 100 or 0 to 1,000.
+If all sequences are unique, then the tree will be fully
+resolved (the root will have three children and other internal nodes
+will have two children). If there are multiple sequences that are
+identical to each other, then there will be a multifurcation. Also,
+there are no support values for the parent nodes of redundant
+sequences.
+</P>
+
+<P>There are many graphical tools for viewing phylogenetic trees that accept Newick format. For viewing small trees and for making figures, I use <A HREF="http://www.megasoftware.net/">MEGA</A> or <A HREF="https://itol.embl.de/">iTOL</A>.
+
+<H3><A NAME="Performance">Speed</A></H3>
+
+<TABLE cellspacing=2>
+<CAPTION><B>Computing maximum-likelihood trees</B></CAPTION>
+<TR bgcolor="lightgrey"> <TD></TD> <TD></TD> <TD></TD> <TD colspan=3 align="center">FastTree 2.0.0</TD> <TD>RAxML</TD> <TD>PhyML 3</TD></TR>
+<TR bgcolor="lightgrey"> <TD>Alignment</TD> <TD># Distinct Sequences</TD> <TD>#Positions</TD> <TD>Settings</TD> <TD>Hours</TD> <TD>Memory (GB) <TD>Hours</TD>  <TD>Hours</TD> </TD></TR>
+<TR><TD>Efflux permeases (COG2814)</TD> <TD>8,362</TD> <TD>394 a.a.</TD> <TD>JTT+CAT</TD> <TD>0.25</TD> <TD>0.35 <TD>&gt;1,200</TD> <TD>&gt;1,200</TD> </TR>
+<TR><TD>ABC transporters (PF00005)</TD> <TD>39,092</TD> <TD>214 a.a.</TD> <TD>JTT+CAT</TD> <TD>1.0</TD> <TD>0.96</TD> <TD>--</TD> <TD>--</TD></TR>
+<TR><TD>16S ribosomal RNAs, distinct families</TD> <TD>15,011</TD> <TD>1,287 nt.</TD> <TD>GTR+CAT</TD> <TD>0.66</TD> <TD>0.56</TD> <TD>99</TD> <TD> &gt;360</TR>
+<TR><TD>16S ribosomal RNAs, distinct families</TD> <TD>15,011</TD> <TD>1,287 nt.</TD> <TD>JC+CAT</TD> <TD>0.49</TD> <TD>0.36</TD> <TD>--</TD> <TD>--</TR>
+<TR><TD>16S ribosomal RNAs</TD> <TD>237,882</TD> <TD>1,287 nt.</TD> <TD>JC+CAT, -fastest</TD><TD>21.8</TD> <TD>5.8</TD> <TD>--</TD> <TD>--</TD></TR>
+</TABLE>
+
+<P>All of the timings are on a single CPU. The FastTree times include the <A HREF="#Support">SH-like local support values</A>.
+For huge alignments, FastTree 2.1 with -fastest is about twice as fast as 2.0, and the multi-threaded version
+is up to four times faster (e.g., 5.6 hours for 237,882 16S rRNAs on 3 CPUs).
+For the COG2814 alignment I ran RAxML 6 with the fast hill-climbing option (not RAxML 7), and I ran
+PhyML was run with the fastest settings (no variation in rates across sites and no SPR moves).</P>
+
+<P>In theory, FastTree takes O(N L a + N<sup>1.5</sup>) space and O(N<sup>1.5</sup> log(N) L a)
+time, where N is the number of unique sequences, L is the width of
+the alignment, and a is the size of the alphabet.
+With -fastest, the theoretical space reduces to
+O(N L a + N<sup>1.25</sup>) space and the time reduces to O(N<sup>1.25</sup> L a).
+The space and time complexity are dominated by
+initializing the top-hits lists and maintaining them during the neighbor-joining phase.
+The minimum-evoution NNIs and SPRs take O(N L a) time per round, or O(N log(N) L a) time total (with default settings).
+The maximum-likelihood NNIs take O(N L a<sup>2</sup>) time per round, or O(N log(N) L a<sup>2</sup>) time total, and O(N L a) space.
+Similarly, the local supports take O(N L a<sup>2</sup>) time and O(N L a ) space.
+In practice, the maximum likelihood NNIs are usually the <A HREF="#faster">slowest step</A>.
+</P>
+
+<H3><A NAME="Accuracy">Accuracy</A></H3>
+
+<P>FastTree is slightly more accurate than PhyML3 with NNI moves
+because it has a better starting tree (thanks to the minimum-evolution SPR moves).
+FastTree is much more accurate
+than minimum-evolution methods such as neighbor joining, BIONJ or
+FastME. FastTree is not as accurate as maximum-likelihood methods that
+do a more intensive search of topology space,
+such as PhyML with SPR moves or RAxML.
+However, for large alignments,
+the more accurate methods are orders-of-magnitude slower than FastTree, and
+most of the splits that are found by these methods but missed by FastTree have poor support.
+</P>
+<TABLE cellspacing=2 cellpadding=4>
+<CAPTION><B>Topological accuracy for simulated alignments with varying numbers of sequences</B></CAPTION>
+<TR bgcolor="lightgrey"> <TD align="right">#Sequences</TD> <TD align="right">250</TD> <TD align="right">1,250</TD><TD align="right">5,000</TD><TD align="right">78,132</TD></TR>
+<TR bgcolor="lightgrey"> <TD align="right">Type</TD> <TD align="right">a.a.</TD> <TD align="right">a.a</TD><TD align="right">a.a.</TD><TD align="right">nt</TD></TR>
+<TR><TD>RAxML 7 <small>(JTTCAT + SPRs)</small></TD>               <TD>90.5%</TD> <TD>88.4%</TD> <TD>88.4%</TD><TD>--</TD> </TR>
+<TR><TD>PhyML 3.0 <small>(&Gamma;<sub>4</sub> + SPRs)</small></TD><TD>89.9%</TD> <TD>--</TD> <TD>-- </TD> <TD>--</TD> </TR>
+<TR><TD><B>FastTree 2.0.0 <small>(JTT+CAT or JC+CAT)</small></B></TD>               <TD>86.9%</TD> <TD>83.7%</TD> <TD>84.3%</TD> <TD>92.1%</TD> </TR>
+<TR><TD>PhyML 3.0 <small>(&Gamma;<sub>4</sub>, no SPR)</small></TD><TD>86.0%</TD> <TD>--</TD> <TD>-- </TD> <TD>--</TD> </TR>
+<TR><TD>PhyML 3.0 <small>(no gamma, no SPR)</small></TD><TD>81.7%</TD> <TD>80.1%</TD> <TD>-- </TD> <TD>--</TD> </TR>
+<TR><TD>FastME 1.1 <small>(log-corrected distances)</small></TD> <TD>79.6%</TD> <TD>77.7%</TD> <TD>75.3%</TD> <TD>--</TD> </TR>
+<TR><TD>BIONJ <small>(max-lik. distances)</small></TD>      <TD>77.7%</TD> <TD>73.7%</TD> <TD>73.1%</TD> <TD>--</TD> </TR>
+<TR><TD>Parsimony (RAxML)</TD> <TD>76.8%</TD> <TD>76.5%</TD> <TD>69.4%</TD> <TD>--</TD></TR>
+<TR><TD>BIONJ <small>(log-corrected distances)</small></TD> <TD>76.6%</TD> <TD>73.0%</TD> <TD>72.3%</TD> <TD>--</TD> </TR>
+<TR><TD>Neighbor-joining <small>(log-corrected distances)</small></TD> <TD>76.0%</TD> <TD>72.6%</TD> <TD>71.6%</TD> <TD>66.1%</TD></TR>
+<TR><TD>Clearcut 1.0.8 <small>(log-corrected distances)</small></TD> <TD>75.5%</TD> <TD>72.3%</TD> <TD>71.5%</TD> <TD>58.1%</TD> </TR>
+</TABLE>
+
+<P>Technical details: Topological accuracy is the percentage of splits in the true trees that were present in the inferred trees.
+The protein simulations are described in the
+<A HREF="http://mbe.oxfordjournals.org/cgi/content/abstract/msp077?ijkey=DtzbXulQ86zzROU&keytype=ref">MBE paper</A>
+and include rate variation across sites and realistic gaps.
+The nucleotide simulations were based on a large 16S tree and were produced similarly. Large neighbor-joining trees were computed with NINJA.
+Maximum-likelihood distances were computed with phylip's protdist. Log-corrected distances were computed with FastTree's -makematrix option.
+For smaller simulations we used RAxML 7.0.4.
+For the 5,000 protein simulations, which are near the limit of feasibility for RAxML, we used RAxML 7.2.1 with the -D option to terminate ML search if the topology changes by less 1%; these still took an average of 70.3 hours each, while FastTree took an average of 0.17 hours.
+</P>
+
+<IMG SRC="splits.png">
+
+<P>For the simulated alignments with 250 protein sequences, we show local support values for the splits inferred by PhyML 3.0 (&Gamma;<sub>4</sub> + SPRs).
+The support values are the minimum of SH-like and approximate likelihood ratio test supports.
+The right-most bin includes the strongly supported splits (0.95 to 1.0). Only 16% of the splits that are found by PhyML but missed by FastTree have strong support.</P>
+
+<TABLE cellspacing=2 cellpadding=4>
+<CAPTION><B>Average log-likelihood for random subsets of 500 16S ribosomal RNAs</B></CAPTION>
+<TR bgcolor="lightgrey"><TD>Method</TD><TD>Average log-likelihood</TD></TR>
+<TR><TD>RAxML 7.0.4<small>GTR+&Gamma;<sub>4</sub></TD> <TD>-168,104</TD></TR>
+<TR><TD><B>FastTree 2.0.0 <small>GTR+CAT</small></B></TD><TD>-168,577</TD></TR>
+<TR><TD>PhyML3 <small>GTR+&Gamma;<sub>4</sub></TD><TD>-168,603</TD></TR>
+<TR><TD>PhyML3 <small>HKY+&Gamma;<sub>4</sub></TD><TD>-168,607</TD></TR>
+<TR><TD>FastTree 2.0.0 <small>JC+CAT</small></TD><TD>-168,637</TD></TR>
+<TR><TD>PhyML3 <small>JC+&Gamma;<sub>4</sub></small></TD><TD>-168,702</TD></TR>
+</TABLE>
+<P>Technical details: To do a fair comparison of tree topologies, branch lengths were reoptimized with RAxML and the GTR+&Gamma;<sub>4</sub> model. PhyML was run with default settings (no SPR moves).
+The 16S alignment was taken from <A HREF="http://greengenes.lbl.gov/">GreenGenes</A>.
+The individual alignments of 500 sequences are available <A HREF="16S_500.tar.gz">here</A>.
+</P>
+
+<TABLE cellspacing=2 cellpadding=4>
+<CAPTION><B>Average log-likelihood for 310 protein families (COGs) of 500 sequences each</B></CAPTION>
+<TR bgcolor="lightgrey"><TD>Method</TD><TD>Average log-likelihood</TD></TR>
+<TR><TD>RAxML 7.0.4 <small>JTT+&Gamma;<sub>4</sub></TD> <TD>-206,724</TD></TR>
+<TR><TD><B>FastTree 2.0.0 <small>JTT+CAT</small></B></TD><TD>-206,993</TD></TR>
+<TR><TD>PhyML3 <small>JTT+&Gamma;<sub>4</sub></small></TD><TD>-207,156</TD></TR>
+</TABLE>
+<P>Technical details: To do a fair comparison of tree topologies, branch lengths were reoptimized with RAxML and the JTT+&Gamma;<sub>4</sub> model. PhyML was run with default settings (no SPR moves).
+The COG alignments are described in the <A HREF="http://mbe.oxfordjournals.org/cgi/content/abstract/msp077?ijkey=DtzbXulQ86zzROU&keytype=ref">MBE paper</A> and are available <A HREF="COG_500.tar.gz">here</A>.
+</P>
+
+<H3><A NAME="OpenMP">Multi-threaded FastTree with OpenMP</A></H3>
+
+<P>FastTreeMP uses <A
+HREF="http://en.wikipedia.org/wiki/OpenMP">OpenMP</A> to parallelize
+many of the steps in computing a tree.  (Thanks to Jim Hester for
+introducing me to OpenMP and contributing code.)
+FastTreeMP with 3 CPUs is typically 1.5-1.7x faster than the single-threaded version of FastTree.
+More than 3 CPUs will give additional speed-ups to the neighbor-joining phase but
+will not speed up the maximum-likelihood phase.
+In principle, FastTreeMP should work just as well on Windows as it does on Unix, but I have not built or tested either OpenMP or SSE3 on Windows; see <A HREF="#Install">compilation instructions</A> if you want to try.
+</P>
+
+<P>As of version 2.1, FastTreeMP will not give exactly the same results as FastTree
+because the top-hits heuristics become non-deterministic (depending on
+which seed is reached first) and because the star topology test is turned
+off. However, in practice, the results are of the same quality.</P>
+
+<P>If you don't want FastTreeMP to use all of the cores on your machine, you can use the OMP_NUM_THREADS environment variable to control its behavior (e.g., in a Unix shell, use <b>export OMP_NUM_THREADS=3</b>). If you run FastTreeMP -help, it will tell you how many threads it will use.</P>
+
+<P>Technical details: These are the steps that are parallelized:
+<UL>
+<LI>Top-hits phase: Processing a potential seed while computing top leaves. (FastTree silently overwrites a top-hits list if it ends up being computed in parallel from two different seeds.)
+<LI>Neighbor-joining phase:
+<UL>
+<LI>Comparing a leaf or a node to a list of other nodes</LI>
+<LI>Updating out-distances during a "refresh" of the top-hits.</LI>
+<LI>"Refreshing" the top hits for the top <I>m</I> hits of a refreshed node.</LI>
+</UL></LI>
+<LI>Optimizing the likelihood of 3 alternate topologies during ML NNIs (with no star topology test)</LI>
+<LI>Optimizing the likelihood of 3 alternate topologies during SH-like local supports.</LI>
+</UL>
+</P>
+
+<P>The most important steps that are not parallelized are the minimum-evolution NNIs and SPRs. Also, the fine-grained nature of the parallelization of the ML code limits the speedup. It would be better to cut the tree at various splits (that would temporarily be held fixed) and then do independent tree computations on each piece. If you are interested in working on this, please let me know.</P>
+
+<H3><A NAME="Gamma20">CAT/Gamma20 Likelihoods</A></H3>
+
+<P>If you use the -gamma option, FastTree will report the likelihood
+under the discrete gamma model with 20 rate categories ("Gamma20").
+(The discrete gamma distribution is a standard
+approximation for accounting for the different rates of evolution at
+different sites and for uncertainty in these rates, see the <A
+HREF="http://www.ncbi.nlm.nih.gov/pubmed/7932792">original paper by
+Yang</A>.)
+More precisely, after optimizing the tree with
+a fixed rate for each site (the CAT model), FastTree
+will rescale the tree to optimize the Gamma20 likelihood.
+FastTree's Gamma20 likelihoods are quite accurate (see below), and
+are over 100 times faster than optimizing branch lengths
+under Gamma4 with other tools.
+The -gamma option only slows FastTree down by around 5%.
+FastTree can also report <A HREF="#CompareLk">per-site likelihoods</A> for
+statistical tests, e.g. for use with
+<A HREF="https://stat.sys.i.kyoto-u.ac.jp/prog/consel/">CONSEL</A>.
+</P>
+
+<P>FastTree's Gamma20 likelihoods are more comparable across
+runs than its CAT likelihoods, and for large alignments they are more
+accurate than the standard Gamma4 approximation with reoptimized
+branch lengths.  For example, on COG
+protein alignments with 500 sequences, if we take the JTT+Gamma20
+likelihood (from PhyML with reoptimized branch lengths) as the gold
+standard, and we estimate the difference in likelihoods between RAxML's
+and FastTree's topology with various tools, then the root mean square error is 19.0 for
+FastTree's CAT20, 17.3 for RAxML's Gamma4, and just 7.0 for FastTree's
+Gamma20.</P>
+
+<P>For nucleotide alignments with the GTR (generalized time-reversible) model,
+FastTree's likelihoods are not as accurate because it does not fully
+optimize the rate parameters.
+Still, they are about as accurate as Gamma4 with fully optimized GTR parameters.
+With 50 16S rRNA sequences, using Gamma20+GTR
+(from PhyML with reoptimized branch lengths) as the gold standard,
+the root mean square error in the difference in likelihoods between
+RAxML's and FastTree's topology is 0.93 for FastTree's GTR+Gamma20
+and 0.64 for RAxML's GTR+Gamma4.</P>
+
+<P>
+Gamma likelihoods are always lower than CAT likelihoods because they account for the
+possibility that each site's rate could have been something else.
+However, because FastTree relies on the CAT-based branch lengths to compute
+the Gamma20 likelihood,
+we do not recommend relying on either FastTree's CAT or Gamma20 likelihoods
+for small alignments of much less than 50 sequences. For such small alignments,
+there could be
+greater uncertainty as to the evolutionary rate of a site,
+which could lead to
+significant errors in the CAT-based branch lengths that FastTree uses
+to compute the Gamma20 likelihood.
+Also note that FastTree's gamma likelihoods may not be
+precisely comparable to
+Gamma4 likelihood estimates from other tools.</P>
+
+<P>Technical details: To quickly compute the Gamma20 likelihood, FastTree first computes all the site likelihoods
+for each of 20 different relative rates, ranging from 0.05 to 20.
+To obtain the shape and scale parameters and the likelihood,
+FastTree alternately optimizes the shape parameter and the scale to maximize the likelihood, using
+<A HREF="http://en.wikipedia.org/wiki/Brent%27s_method">Brent's method</A>.
+The optimization uses only the site likelihoods, and does not require any
+per-node or per-sequence computations.
+</P>
+
+<P>Given the site likelihoods, a shape (alpha) parameter, and a
+scale parameter,
+FastTree can approximate the likelihood of each site by summing P(data | rate) * P(rate | shape & scale) over the 20 relative rates.
+In most tools, the scale parameter is set so that the average of the gamma distribution is 1, but FastTree
+allows the average relative rate to vary. FastTree does this because
+branch lengths inferred under the CAT approximation tend to be nearly linear with the Gamma20 lengths but
+can be off by a
+constant factor.
+Also, in most tools, the discrete relative rates are chosen to have equal probabilities.
+FastTree instead uses fixed discrete rates, and estimates a discrete probability for each rate.
+FastTree uses the area
+under the continuous gamma distribution between
+two midpoints: P(rate<sub>i</sub> | shape & scale) = integral of the gamma distribution with the given shape parameter and a mean of 1 from scale*(rate<sub>i-1</sub> + rate<sub>i</sub>)/2
+to scale*(rate<sub>i</sub> + rate<sub>i+1</sub>)/2.</P>
+
+<H3><A NAME="Matrix">Using Your Own Transition Matrix</A></H3>
+
+<P>You can use the <B>-trans</B> option to read the transition matrix from a file.
+This option is only supported for amino acid aligments and it only affects the maximum-likelihood phase of FastTree.
+(You can use the <B>-matrix</B> or <B>-nomatrix</B> options to modify the minimum-evolution phase of FastTree.)
+
+<P>The transition matrix file must be tab-delimited, with the columns A R N D C Q E G H I L K M F P S T W Y V * (in that order). Each entry gives the rate at which one amino acid changes to another. The last column ("*") should have the stationary distribution. Each row must have the row's name as its first field (in order, A R N ... V). An example file (for the WAG model) is <A HREF="wag.mat">here</A>.
+
+<P>The transition matrix <i>Q</i> and the stationary distribution <i>&pi;</i> should satisfy:
+<UL>
+<LI>each amino acid is reachable: each element of <i>&pi;</i> must be positive
+<LI>the frequencies of the amino acids sum to 1: &Sigma; <i>&pi;<sub>i</sub></i> = 1
+<LI>each amino acid can mutate away to other amino acids: each element on the diagonal of <i>Q</i> is negative
+<LI>each element off the diagonal of <i>Q</i> is non-negative (i.e. if <i>Q</I>(A,R) &gt; 0, then A can mutate directly to R)
+<LI>when at the stationary distribution, the frequencies of each amino acid do not change: <i>Q</i> &middot; <i>&pi;</i> = 0
+<LI>the total frequency of all amino acids does not change as the distribution evolves: the sum of each column in M is zero
+<LI>the average rate of mutation is 1: &Sum; <i>Q<sub>ii</sub> &pi;<sub>i</sub></i> = -1
+<LI>evolution is time reversible: <i>Q<sub>ij</sub></i> / <i>Q<sub>ji</sub></i> = <i>&pi;<sub>i</sub> / s<sub>j</sub></i>
+</UL>
+
+<P>Note that the transition matrix is usually not symmetric.
+
+<P>Use of a highly biased transition matrix can lead to numerical problems for single-precision FastTree. So for custom transition matrices, we recommend using the double-precision version of FastTree (compiled with -DUSE_DOUBLE).
+
+<H3><A NAME="FAQ">Frequently Asked Questions</A></H3>
+
+<H3><A NAME="Align">Does FastTree require aligned sequences?</A></H3>
+
+<P>Yes. If you do not have a multiple sequence alignment, we recommend
+using <A HREF="http://www.drive5.com/muscle/">MUSCLE</A> to create one
+and <A HREF=https://home.cc.umanitoba.ca/~psgendb/doc/Castresana/Gblocks_documentation.html>gblocks</A> to
+"trim" it (remove low-confidence parts of the alignment, such as positions that contain many gaps). Alternatively,
+for large protein families, we recommend hmmalign from the <A
+HREF="http://hmmer.org/">HMMer package</A>. If using hmmalign,
+you should remove columns that do not match the model (usually output
+in lower case). For large RNA families we recommend <A HREF="http://eddylab.org/infernal">Infernal</A>.
+</P>
+
+<H3><A NAME="Unrecognized">Why does FastTree warn about unrecognized characters?</A></H3>
+
+<P>FastTree only handles two alphabets. Its nucleotide alphabet is
+ACGT, where T can also be represented as U (but not lower-case u). Its amino acid alphabet
+includes the 20 standard amino acids (ARNDCQEGHILKMFPSTWYV).  FastTree
+also expects the alignment to contain missing data or gaps,
+represented as "-" characters.  FastTree treats any other characters
+as missing data, and issues a warning.  Thus, FastTree will report
+warnings for alignments that contain ambiguous 1-letter codes
+(R or N for nucleotides or Z or X for amino acids) or rare amino acids
+(e.g. U for selenocysteine).
+</P>
+
+<H3><A NAME="BranchLen">Why does FastTree report so many branch lengths of 0.0005 or 0.0001, or even negative branch lengths?</B></H3>
+
+<P>By default, the maximum-likelihood phase of FastTree does not allow branch lengths of less than 0.0005, so unresolvable internal branches often end up with lengths of about 0.0005. (Before FastTree 2.1.7, the limit was 0.0001, so if you are using an older version, you may see many branch lengths of 0.0001 instead.)</P>
+
+<P>If you need to resolve very-short branch lengths accurately, you can use a double-precision version of FastTree. To do this, you need to compile it with -DUSE_DOUBLE and you need to use version 2.1.8 or later, e.g.
+
+<pre>gcc -DUSE_DOUBLE -O3 -finline-functions -funroll-loops -Wall -o FastTree FastTree.c -lm</pre>
+
+<P>If you run FastTree with -noml, then the minimum-evolution phase of FastTree may return branch lengths that are slightly less than zero. You can think of these negative branch lengths as noisy estimates of the actual branch length, which is presumably near zero. A negative branch length also usually implies a lack of confidence in the adjoining split.</P>
+
+<H3><A NAME="faster">How do I get FastTree to run faster?</A></H3>
+
+<P>FastTree's default settings should be fast enough for most uses. However, if you are concerned about performance, then you can:</P>
+
+<UL>
+<LI>Use -fastest to speed up the neighbor-joining phase  (recommended for over 50,000 sequences)</LI>
+<LI>Use the multi-threaded (OpenMP) version. With 3 CPUs, this typically gives speed-ups of 1.5 to 1.7x.
+<LI>Use -mlnni 4 to reduce the rounds of ML NNIs, or -noml to skip them altogether.</LI>
+<LI>Reduce the size of your alignment</LI>
+</UL>
+
+<P>The -fastest option turns off local hill-climbing search during neighbor-joining and
+uses the top-hits heuristic more aggressively. For an alignment of 237,000 16S rRNAs, this speeds up the top-hits and neighbor-joining phases by around four-fold, with little effect on tree quality as estimated by
+total tree length or log likelihood. Similarly, on the 16S-like simulations with ~78,000 sequences, -fastest does not have any effect on accuracy (as long as you include NNIs and SPRs afterwards). You can also use -fastest -no2nd for an intermediate level of speed and intensiveness of search during neighbor-joining.</P>
+
+<P>On the 78K-sequence 16S-like simulations, reducing the rounds of ML
+NNIs to just 4 (-mlnni 4) has a negligible effect on accuracy. In total, the ML
+NNIs only improve accuracy from 91.4% to 92.1%.  If you use the -mlnni
+option, you can still refine the topology later with -intree.</P>
+
+<P>You can also try to reduce the size of your alignment.
+FastTree's running time scales roughly
+linearly with the number of positions in the alignment.  If there are
+many columns that are mostly gaps, you can speed up FastTree by removing
+them.
+Furthermore, the largest alignments usually
+have many nearly-identical sequences,
+so you might want to use a fast clustering method such as
+<A HREF="http://drive5.com/usearch/manual/index.html">uclust</A>
+or <A HREF="https://pubmed.ncbi.nlm.nih.gov/17118958/">PartTree</A>
+to reduce your data set.</P>
+
+<P>Here is the breakdown of how long the various stages of FastTree 2.0.0 take, with the -fastest option, on 237,882 distinct 16S sequences with the Jukes-Cantor + CAT model, along with the theoretical scaling (N for number of sequences, L for the length of alignment, and a for alphabet size).</P>
+
+<P><TABLE border=1 cellspacing=0>
+<TR><TD><B>Stage</B></TD> <TD><B>Cumulative Time (hr)</B></TD>  <TD><B> Time for this Stage (hr)</B></TD> <TD><B>Theoretical Time</B></TD></TR>
+
+<TR><TD>Top hits for sequences</TD> <TD align="center">2.1</TD> <TD align="center">2.1</TD><TD align="center">O(N<sup>1.5</sup> L)</TD></TR>
+<TR><TD>Neighbor-Joining</TD> <TD align="center">10.8</TD> <TD align="center">8.7</TD><TD  align="center">O(N<sup>1.5</sup> L a)</TD></TR>
+<TR><TD>Min. evo. NNIs, 58 rounds <small>(with subtree skipping)</small></TD> <TD align="center">--</TD> <TD align="center">0.2</TD><TD  align="center">O(N log(N) L a)</TD></TR>
+<TR><TD>Min. evo. SPRs, 2 rounds</TD> <TD align="center">12.2</TD> <TD align="center">1.2</TD><TD  align="center">O(N L a)</TD></TR>
+<TR><TD>ML lengths (1 round)</TD> <TD align="center">12.7</TD> <TD align="center">0.4</TD><TD align="center">O(N L a<sup>2</sup>)</TD></TR>
+<TR><TD>ML NNIs, 1st round</TD> <TD align="center">15.1</TD> <TD align="center">2.5</TD><TD align="center">O(N L a<sup>2</sup>)</TD></TR>
+<TR><TD>Selecting per-site rates</TD> <TD align="center">15.5</TD> <TD align="center">0.4</TD><TD align="center">O(N L a<sup>2</sup>)</TD></TR>
+<TR><TD>ML NNIs, 2nd round</TD> <TD align="center">16.4</TD> <TD align="center">0.8</TD><TD align="center">O(N L a<sup>2</sup>)</TD></TR>
+<TR><TD>ML NNIs, rounds 3-26 <small>(with subtree skipping and star tests)</small></TD> <TD align="center">19.4</TD> <TD align="center">3.0</TD><TD align="center">O(N log(N) L a<sup>2</sup>)</TD></TR>
+<TR><TD>ML NNIs, 27th round <small>(no subtree skipping or star tests for last round)</small></TD> <TD align="center">20.3</TD> <TD align="center">1.0</TD><TD align="center">O(N L a<sup>2</sup>)</TD></TR>
+<TR><TD>ML lengths (1 round)</TD> <TD align="center">20.6</TD> <TD align="center">0.3</TD><TD align="center">O(N L a<sup>2</sup>)</TD></TR>
+<TR><TD>SH-like local supports</TD> <TD align="center">21.8</TD> <TD align="center">1.2</TD><TD align="center">O(N L a<sup>2</sup>)</TD></TR>
+</TABLE></P>
+
+<P>In the single-threaded version of FastTree 2.1.0, the timings are about the same, except that the neighbor-joining phase finishes after 4.7 hours instead of 8.7 hours. With the multi-threaded version and 3 CPUs, the entire computation takes just 5.6 hours.</P>
+
+<P>The ME NNIs converged in 58 rounds, a bit less than the limit of
+4*log<sub>2</sub>(N) = 71 rounds, and the ML NNIs converged in 26 rounds, a bit less than the limit of
+2*log<sub>2</sub>(N) = 36 rounds, but more ML NNIs were found in the last "slow" round with the heuristics mostly turned off.
+Note that the the maximum-likelihood NNIs are over 10 times slower per round than the minimum-evolution NNIs. Also, the 1st, 2nd, and last rounds of ML NNIs are particularly slow. 
+</P>
+
+<H3><A NAME="MoreAcc">How do I get FastTree to be more accurate?</A></H3>
+
+<P>FastTree's default settings give good accuracy in a reasonable amount of time. You may get slight increases in accuracy by changing these settings:</P>
+
+<UL>
+<LI>Use the -pseudo option if you have many fragmentary sequences</LI>
+<LI>Use -spr 4 to increase the number of rounds of minimum-evolution SPR moves</LI>
+<LI>Use -mlacc 2 -slownni to make the maximum-likelihood NNIs more exhaustive (~4x slower for 5,000 proteins)</LI>
+<LI>If you are running huge alignments with -fastest, use -no2nd as well: this makes the neighbor-joining phase about 2x slower and may give slight improvements.</LI>
+</UL>
+
+<H3><A NAME="CompareLk">How do I compare the likelihoods of different topologies with FastTree?</A></H3>
+
+<P>Use the -gamma option to have FastTree report the <A HREF="#Gamma20">Gamma20</A> likelihood,
+that is, the likelihood with the discrete
+gamma distribution and 20 rate categories.
+Or, use the -intree option with -gamma -nome -mllen to have
+FastTree reoptimize the branch lengths and
+report the Gamma20 likelihood for a fixed topology.
+These likelihoods should be comparable across runs.</P>
+
+<P>If you use both the -log and -gamma
+options, FastTree will report per-site likelihoods
+in a log file. (It will also report the per-site likelihood for each rate
+category.) You can use a perl script,
+<A HREF="GammaLogToPaup.pl">GammaLogToPaup.pl</A> (included in this repository), on two or more of these log files
+to reformat this information for use with
+<A HREF="https://stat.sys.i.kyoto-u.ac.jp/prog/consel/">CONSEL</A>,
+which can perform the Shimodaira-Hasegawa (SH) test
+and the approximately unbiased (AU) test to determine if one topology is significantly better
+than other topologies. For example, these commands will compare two topologies
+for a nucleotide alignment under the GTR+Gamma20 model:
+
+<pre>
+./FastTree -gamma -nt -gtr -nome -mllen -intree topology1 -log topology1.log alignment.p > topology1.ftlen
+./FastTree -gamma -nt -gtr -nome -mllen -intree topology2 -log topology2.log alignment.p > topology2.ftlen
+perl GammaLogToPaup.pl topology1.log topology2.log > top12.txt
+makermt --paup top12.txt
+consel top12
+catpv top12.pv
+</pre>
+
+where makermt, consel, and catpv are from the CONSEL package.
+
+<P>Warning -- Be careful with the -log option. If you omit the log file's name from the above FastTree commands, FastTree will think that the next argument, namely alignment.p, is your log file, and your alignment will be overwritten!</P>
+</P>
+
+<H3><A NAME="Root">What does the rooting of the tree mean?</A></H3>
+
+FastTree's placement of the root is arbitrary and is not biologically meaningful. To place the root accurately, you need outside information beyond what is in the alignment. If you do not have such information, another common approach is to use the midpoint, so that the maximum distance from the root to any leaf is minimized. This makes sense if the sequences are evolving according to a molecular clock. Most tree viewers can reroot a tree, but for huge trees I use the <A HREF="reroot.pl">reroot.pl</A> script (included in this repository).
+
+<H3><A NAME="Deterministic">Is FastTree deterministic?</H3>
+
+<P>The single-threaded version of FastTree is deterministic and rerunning the same version of FastTree on the same alignment on the same computer with the same settings should give identical results. There can be differences in results across platforms due to numerical issues, but the resulting trees should have nearly identical likelihoods. The local-bootstrap support values are derived using a random number generator and will vary from run to run if you modify the seed.</P>
+
+<P>FastTreeMP may not be entirely deterministic. It is theoretically possible for changes in the order that threads are executed to affect heuristic search during the neighor-joining phase. This is unlikely to affect the quality of the final tree but there may be subtle differences.</P>
+
+<H3><A NAME="Intree">Why does -intree -nome -mllen change the tree topology in rare cases?</H3>
+
+If your alignment contains identical sequences and the input tree places these identical sequences in different locations in the tree, then the output tree will not match the input tree. The reason for this is that FastTree does not represent the duplicate sequences in its internal representation of the tree, so it has no way of "remembering" that they belong in different places. It should issue a warning in this case, but it does not -- it simply uses one of the locations for all of the identical sequences.
+
+<H3><A NAME="GenomeWide">Why does FastTree use so much memory on whole-genome alignments?</H3>
+
+<P>FastTree is optimized for very alignments with very large numbers of
+sequences, not for very wide alignments.  By default, FastTree uses 1,000
+resamples to estimate the support for each split, and it uses 4 *
+1,000 * L bytes of memory for this. That comes to 4 GB of RAM per million positions. You can eliminate the support value
+computation with the -nosupport option, as the support values are
+probably meaningless for such wide alignments.  (Every split will
+probably have 100% support, but this does not indicate that the splits
+are correct, because FastTree assumes that there is no recombination
+between lineages, which is very unlikely to be true for such wide
+alignments.) You could also reduce the memory requirement 10-fold by
+using 100 resamples instead of 1,000 resamples (the -boot 100 option).
+
+<P>Even without resamples, FastTree requires around 21 * N * L bytes of
+memory for large nucleotide alignments if you use the generalized
+time-reversible model (-gtr). (For large amino acid alignments, the memory requirement is around 85 * N * L.
+For alignments with many sequences, there is an additional memory requirement during the neighbor joining phase of around 16 * N<sup>1.5</sup> bytes with default settings or 24 * N<sup>1.25</sup> bytes if using -fastest.)
+For genome-wide nucleotide alignments, memory usage will usually be a bit less than 21 * N * L with
+minimum-evolution FastTree (-noml option) or with the Jukes-Cantor
+model (the default) . For closely-related sequences (maximum divergence
+of less than 10%), you could also remove the invariant positions and
+use minimum-evolution FastTree with no correction for multiple
+substitutions (-rawdist). In theory this should work well but I have
+not tested it. However, if you want a maximum-likelihood tree, you *cannot*
+remove the invariant positions.
+
+<P>FastTree was developed by <A HREF="http://morgannprice.org">Morgan N. Price</A> in <A HREF="http://genomics.lbl.gov">Adam Arkin's group</A> at Lawrence Berkeley National Lab.
+
+</BODY>
+</HTML>

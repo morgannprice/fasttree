@@ -1,0 +1,104 @@
+<HTML>
+<HEAD>
+<TITLE>Fast Tree-Comparison Tools</TITLE>
+</HEAD>
+<BODY>
+
+<H2>Fast Tree-Comparison Tools</H2>
+
+<P>Comparing tree topologies is an essential and time-consuming step
+in phylogenetic analysis.
+<B>CompareTree.pl</B> and <B>CompareToBootstrap.pl</B>
+are up to 100 times faster than the standard tools for comparing large trees.
+For example, to compute the global bootstrap
+for 100 replicates on a tree of 52,000 sequences, phylip's
+<A HREF="http://evolution.genetics.washington.edu/phylip/doc/consense.html">consense</A>
+took 118 hours and 9.4 GB
+of RAM, while CompareToBootstrap.pl took just 80 minutes and 720 MB of RAM.
+To compare two trees of
+52,000 sequences took CompareTree.pl just 21 seconds, while phylip's
+<A HREF="http://evolution.genetics.washington.edu/phylip/doc/treedist.html">treedist</A>
+took 3 minutes to compare two trees of just 5,000 sequences.</P>
+
+<P>The key trick is to hash the splits of a tree (the two lists of
+nodes on either side of an internal edge) in just O(N) time by setting
+the hash value for an internal node to the sum of its childrens' hash
+values. We rely on the tree itself to store the list of
+descendents, so that the hash requires only O(N) space.  Thus,
+CompareTree.pl and CompareToBootstrap.pl require just O(N) space and
+have a best-case running time of just O(N).  In contrast, most tools
+require at least O(N<sup>2</sup>) time and space to compare two
+trees.</P>
+
+<P><B>CompareTree.pl</B> compares the splits in one tree to those in
+another. In particular, it reports the fraction of splits in the 1st
+tree that are also found in the second tree. This is related to the
+"symmetric" or Robinson-Foulds distance by <i>fraction = 1 -
+d/(2*(N<sub>leaves</sub>-3)).</i> CompareTree also reports the splits that line up and
+compares their branch lengths and support values.</P>
+
+<P><B>CompareToBootstrap.pl</B> counts how often the splits in a main tree are found in the resampled trees.
+The bootstrap value for an internal node is the fraction of times that this split
+(that is, the leaves beneath this node versus all other leaves) is
+maintained in the resampled trees. CompareToBoostrap.pl outputs a new tree with the same topology and branch lengths as the original tree, but with these new bootstrap values. (Note: this is rather different from what
+<A HREF="http://evolution.genetics.washington.edu/phylip/doc/consense.html">consense</A>
+does -- consense computes a new majority-consensus topology and returns the number of trees that support each split as the branch length for that internal node.)</P>
+
+<H3>Running the tree comparison scripts</H3>
+  
+<P>The tree-comparison tools are written in Perl and
+should run on any platform with Perl installed. (We use version
+5.32.1.) These tools rely on the <A HREF="MOTree.pm">MOTree.pm</A> Perl module, which is
+included in this repository.
+
+<P>Usage:
+  <pre>
+    CompareToBootstrap.pl -tree main_tree -boot bootstrapped_trees > new_tree
+    CompareToBootstrap main_tree bootstrapped_trees > new_tree
+    CompareTree.pl -tree tree1 -versus tree2 > comparison_table
+  </pre>
+
+<P>All input files must be in Newick format.
+
+<P>CompareToBootstrap.pl will compare the main tree to the bootstrapped
+trees. The bootstrapped tree file should contain multiple trees
+separated by newlines and ending with a semicolon (";"), as is
+standard for Newick format. (Each tree may be split across multiple
+lines.) CompareToBootstrap.pl will print out a tree with the same
+topology and branch lengths as the main tree and with bootstrap values
+as the names for the internal nodes. The bootstrap values are
+fractions, not counts.  In other words, they range from 0 to 1, not
+from 0 to number of bootstraps.
+
+<P>CompareTree.pl will compare two trees that describe the same set of
+leaves. It reports to standard error a line on how similar the trees
+are. Frac is the fraction of splits in the first tree that are found
+in the second tree, MaxLnDf is the maximum difference in branch
+lengths, and MaxBtDf is the maximum difference in bootstrap values.
+
+<P>CompareTree.pl also prints out a tab-delimited table with one line per
+internal node in the first tree. You will probably want to save this
+to a file. Each line reports the branch length to its ancestor, its
+bootstrap value (if any), the number of descendents, the values for
+the corresponding split in the second tree (if this split exists in
+the second tree), and two descendents of the split such that the least
+common ancestor of these descendents is this node.  It also reports
+the MOTree internal identifiers of the nodes as Node1 (and also Node2
+if there is a matching node in the second tree).  These are useful if
+you want to use MOTree::(new => $newickstring) to parse and further
+analyze these trees.
+
+<P>You can also run CompareTree.pl on files that contain more than one
+tree. It will compare 1st tree in each file, the 2nd tree in each
+file, etc.
+
+<P>Both tools handle multifurcating trees, e.g., if comparing
+(((A,B),C),D,E,F);
+to
+((A,B,C),D,E,F);
+then the split ABC|DEF matches but the split AB|CDEF does not.
+
+<P>The tree-comparison tools were developed by <A HREF="http://morgannprice.org">Morgan N. Price</A> in Adam Arkin's group at Lawrence Berkeley National Lab.
+
+</BODY>
+</HTML>

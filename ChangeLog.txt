@@ -1,0 +1,387 @@
+Version 2.1.11: May 17, 2019
+
+	Added the -trans option to read a transition matrix (and
+	stationary distribution) from a file. This is for amino acid
+	alignments only.
+
+Version 2.1.10: April 11, 2017
+
+	Fix a bug when using GTR models with huge alignments with over 2
+	billion non-gap characters. The frequencies of A, C, G, and T were
+	being computed with a 32-bit (signed) counter. This led to
+	negative frequencies and eventually to a crash with
+	"FastTree.c:9769: tqli: Assertion `iter < 30' failed.". SetMLGtr()
+	now uses 64-bit counters. Also, more information about the
+	optimization of the GTR model is saved in the log file (if using
+	the -log option). To support this, gtr_opt_t now includes fpLog.
+
+Version 2.1.9: March 29, 2016
+
+	Add the -lg option to use Le/Gascuel model for amino acid
+	substitutions. (Thanks to Doug Phelan and Ashley Superson at
+	Oakland University.)
+
+Version 2.1.8: March 24, 2015
+
+	To provide useful branch lengths for very wide alignments of very
+	close closely-related sequences, the minimum branch lengths were
+	dramatically decreased when compiling with USE_DOUBLE. If using ML
+	on an alignment of closely-related and long sequences, issues a
+	warning, and recommends recompiling with USE_DOUBLE (if not
+	already using USE_DOUBLE).
+
+Version 2.1.7: January 22, 2013
+
+	To avoid numerical problems that led to crashes in rare cases,
+	increased the minimum branch length for likelihood optimization
+	from 1e-4 to 5e-4.
+
+	Also added a compile-time option to use double-precision instead
+	of single-precision floating point (compile with
+	-DUSE_DOUBLE). This allowed verification that single-precision
+	floating point does not reduce the accuracy of topologies on
+	simulations with 5,000-78,000 sequences. Also, if accurate shorter
+	branch lengths are needed (i.e. for analyzing a very wide
+	alignment or very similar sequences), then double-precision should
+	allow a significant reduction in the branch length constants
+	MLMinBranchLength and MLMinRelBranchLength.
+
+Version 2.1.6: September 20, 2012
+
+	Corrected a segmentation fault while computing support values for
+	alignments with over 1 million positions. This arose due to
+	allocating an array with #boostraps * #positions integers: for
+	huge alignments, the size of this array would overflow 32-bit
+	arithmetic.
+
+Version 2.1.5: August 30, 2012
+
+	Added the -out option to meet popular demand
+
+	Added a warning for Windows users to run it inside a command shell
+
+Version 2.1.4: July 28, 2011
+
+	Added the -quote option (thanks to Samuel Shepard at the CDC)
+
+	Added the -wag option (thanks to Siavash Mirarab at UT Austin)
+
+Version 2.1.3: April 12, 2010
+
+	Corrected a bug that could lead to infinite recursion and stack
+	overflow within the NJ phase with -fastest
+
+Version 2.1.2: March 24, 2010
+
+	Corrected a bug with printing out trees when sequence names
+	contain the "%" character.
+
+Version 2.1.1: December 12, 2009
+
+	Corrected a numerical problem that caused earlier versions to
+	crash on highly gappy protein alignments: added gapFreq to
+	distance_matrix_t and use it in NormalizeFreq if we have a
+	virtually-all-gap profile position.
+
+Version 2.1.0: October 15, 2009
+
+	Implemented fast Gamma20 log likelihoods (-gamma). By default,
+	FastTree reports CAT-based log likelihoods, which are not
+	necessarily comparable across runs or to likelihoods from other
+	tools.  With the -gamma option, FastTree can now report a
+	likelihood under the "Gamma20" model, which accounts for rate
+	variation across sites with a discrete gamma distribution with 20
+	categories.  FastTree computes this likelihood without
+	reoptimizing the branch lengths under the new model -- instead, it
+	optimizes a scale factor for all branch lengths and the shape
+	parameter of the gamma distribution.  Nevertheless, for large
+	trees, these likelihoods should be very accurate. The Gamma20
+	likelihoods are quite fast to compute: for alignments with >= 500
+	sequences, -gamma should slow FastTree down by at most 5%. With
+	-gamma, FastTree also reports more accurate branch lengths.
+
+	Added reporting of per-site likelihoods (under -gamma -log) and
+	the accessory script GammaLogToPaup.pl to convert this for use by
+	CONSEL.
+
+	Rewrote the top-hits code to use 8 rather than 20 bytes per entry
+	in the top-hits lists and to be faster. Leads to slight changes in
+	results but not to any consistent change in tree quality, even
+	without NNIs or SPRs.
+
+	Other reductions in memory usage: (1) reallocate posterior
+	distributions to ensure that we save space (realloc was not
+	shrinking them effectively). (2) Eliminate the 2nd copy of the
+	alignment.
+
+	With -fastest, added a 2nd level of top-hits heuristic to reduce
+	memory usage and running time for the neighbor joining phase. Let
+	q = sqrt(m) = N**0.25. FastTree will store top-hits lists of size
+	q for the top q hits of any gene that has a 1st-level top-hits
+	list, and will go back to the seed to get more candidate hits
+	instead of doing a full refresh when these "2nd-level" lists
+	become too short. FastTree will also create top-hits lists for the
+	top q/2 hits of any seed, even if it fails the close check. Does
+	not affect accuracy in huge simulations, but may lead to slight
+	reductions in tree quality. Use -fastest -no2nd to turn off
+	2nd-level top-hits.
+
+	Added the OpenMP version. Most steps are parallelized: key
+	exceptions are ML lengths, optimizing rate categoriess, ME NNIs
+	and ME SPRs. The parallelizing of the ML phase only uses 3
+	threads. With OpenMP, the top-hits phase becomes non-deterministic
+	and the star topology test is turned off.
+
+Version 2.0.1: August 26, 2009
+
+	Add a work-around for numerical problems in Jukes-Cantor model on
+	huge alignments (see "replaced weight %f with %f")
+
+	Report scaling of CAT model's rate categories to stderr (unless
+	-quiet is used)
+
+Version 2.0.0: July 22, 2009
+
+	Accounted for variable rates across sites with the CAT
+	approximation to the gamma model used by RAxML (see A. Stamitakis,
+	"Phylogenetic models of rate heterogeneity: a high performance
+	computing perspective", IPDPS 2006). The site categories are set
+	once, after the first round of NNIs or (if using -mllen) after the
+	first round of optimizing branch lengths. FastTree uses a Bayesian
+	approach to avoid overfitting these rates.
+
+	Implemented SH-like local supports, as in PhyML 3. In practice,
+	FastTree's supports are nearly identical to those from PhyML with
+	the discrete Gamma-4 model, despite the CAT approximation. One
+	difference is that FastTree reports 0 for a "bad split" that turns
+	out to support a different topology, instead of reporting the
+	(negative) likelihood difference as the support value. During this
+	phase, FastTree also reports any "bad" splits (NNIs that would
+	improve the likelihood) and whether these are due to constraints
+	or not.
+
+	Implemented the generalized time-reversible nucleotide model of
+	evolution (-gtr option). The base frequencies are the same as in
+	the alignment; the rates are optimized just before selecting site
+	categories. Or use -gtrfreq and -gtrrates to set them yourself.
+
+	Improvements to heuristics for maximum-likelihood NNIs:
+	(1) Fixed a bug in the code for deciding whether to skip the 2nd
+	round of optimizing branch lengths around a quartet.
+	(2) Skip the 2nd round if one of the NNIs is a clear winner, not
+	just if the original topology is a clear winner.
+	(3) Skip the 2nd round if we are allowing the star test, the
+	original topology is winning, and the internal branch lengths of
+	the alternatives are roughly 0, as a biologically significant
+	improvement is unlikely.
+	(4) Skip traversing into an entire subtree if no significant
+	improvement in that subtree has been found in either of the last
+	two rounds. This affects minimum-evolution NNIs as well.  Use
+	-slownni to turn off subtree skipping.
+	(5) This allows us to increase the default number of rounds of
+	minimum-evolution NNIs to 4*log2(N) and the default number of
+	rounds of maximum-likelihood NNIs to 2*log2(N)..
+	(6) Stop doing NNIs if no significant tree improvements were found
+	in the last round.
+	(7) But, add a single slow round of ML NNIs at the end to catch
+	the rare errors that result from all the heuristics.
+
+	The -mllen option, in combination with -intree and -nome, lets you
+	optimize branch lengths for a fixed topology.
+
+	The -log option saves intermediate trees, settings, and model
+	details to the specified log file.
+
+	Use SSE3 instructions if the compiler has set __SSE__ to indicate
+	that they are available. SSE3 improves performance of protein
+	maximum likelihood up to 50% and speeds up the protein
+	minimum-evolution code slightly. Nucleotide code may be slightly
+	faster or slightly slower. Use -DNO_SSE to compile without SSE
+	instructions.
+
+	Sped up convergence in the branch length optimizer by tweaking the
+	selection of starting bounds for the brent method and by
+	terminating optimization if the new guess differs by less than
+	0.2% of the length or less than 0.0001.
+
+	Reduce posterior profile computations while optimizing a quartet
+	from 10 to 7 (AB, CD, ABC, ABD, CD with new branch lengths, ACD,
+	BCD).
+
+	Raised default -constraintWeight to 100 because 10 is not that big
+	a difference in log likelihoods.
+
+	Use exact posteriors for protein sequences by default.
+
+Version 1.9.0: June 19, 2009
+
+	Added maximum-likelihood nearest-neighbor interchanges, with the
+	Jukes-Cantor model for nucleotide data or the Jones-Taylor-Thorton
+	model for amino acid data, and no variation in rates across sites.
+	By default, do O(log N) rounds of maximum-likelihood NNIs, but
+	quit if the total tree log-likelihood has converged (it improves
+	by less than 0.1 over the last round).
+
+	When considering NNI moves (3 possible quartets), FastTree
+	optimizes all 5 branch lengths in turn, up to a branch length
+	accuracy of 0.001. By default it uses two rounds of optimizing the
+	5 branch lengths to estimate the log-likelihood for the
+	quartet. During the first round of NNIs, the minimum-evolution
+	profiles and branch lengths are used initially, but they are
+	gradually replaced by the posterior distributions and the
+	maximum-likelihood branch lengths.
+
+	Two heuristics to speed up ML NNIs: the star topology test and the
+	one-round heuristic.
+
+	Star topology test: If ((A,B),(C,D)) is noticeably more likely
+	than the star topology (the log-likelihood with the optimal
+	internal branch length is at least 5 better), and there was no NNI
+	at this node or its neighbors in the previous round, then do not
+	optimize the other branch lengths or estimate log likelihoods for
+`	the other topologies.
+
+	One-round heuristic: If after the 1st round of optimizing 5 branch
+	lengths for the 3 possible quartet topologies, the log-likelihood
+	value is more than 5 worse than the original topology, do not
+	optimize that topology further (no 2nd round of optimizing branch
+	lengths).
+
+	For amino acid data, uses an eigen-representation of posterior
+	distributions at internal nodes to compute likelihoods in O(a)
+	time, not O(a***2) time, where a is the alphabet size. However,
+	computing posterior distributions still takes O(a**2) time. Uses
+	an approximation to reduce this to O(a) time if the posterior
+	distribution is dominated by one amino acid and the approximation
+	is accurate.
+
+	For the Jukes-Cantor model, the posterior distribution of a
+	character and a gap, or of two characters that match (potentially
+	also mixed with gaps or uncertainty) is the same as another
+	character mixed with a gap. FastTree uses this representation to
+	save memory and CPU time.
+
+	Added many command-line options relating to maximum-likelihood
+	NNIs, such as -mlnni to change the maxinum number of rounds of ML
+	NNIs, -mlacc 2 to turn off the ML heuristics (or higher values to
+	optimize the branch lengths for a quartet of posterior profiles
+	more thoroughly), -mlexact to turn off approximate posteriors,
+	-noml to turn off ML computations entirely, and -nome to turn off
+	minimum-evolution computations entirely (except that
+	minimum-evolution is still used to get initial branch lengths).
+	change the number of rounds of ML NNIs.)
+
+	Make sure profiles are updated on the way "back up" during NNIs
+
+Version 1.1.0: May 11, 2009
+
+	Added heuristic subtree-prune-regraft moves. As suggested by
+	Richard Desper and Olivier Gascuel, each SPR is treated as a chain
+	of NNIs, and FastTree uses the sum of changes in lengths of
+	internal branches as an estimate of the change in tree length for
+	the SPR. (In FastME's balanced NNIs, the change in internal branch
+	length is the same as the change in tree length, but for FastTree,
+	this is an approximation because of the log-of-averages
+	vs. averages-of-logs issue.) By default, FastTree does two rounds
+	of SPRs, with exhaustive search for moves up to length two. Then
+	it extends each of these moves up to a length of 10 along the best
+	step at each point. (You can use -spr 0 to turn these off, as they
+	are a bit slow and only seem to improve accuracy slightly.)
+
+	Doubled the default number of rounds of NNIs.
+
+	Switch to using balanced joins by default, as they are much faster
+	and have no apparent impact on accuracy.
+
+	Tweaked the top-hits heuristic to be more aggressive -- the
+	default -close value is now log(N)/(log(N)+2). This makes it
+	noticeably faster on huge alignments, without any impact on
+	accuracy.
+
+	Removed O(N**2) steps -- use a sqrt(N) "top-visible" list to
+	select a candidate for the best join in O(sqrt(N)) time instead of
+	O(N) time per join. Also update the total profile from scratch much
+	less frequently.
+
+	Use stale out-distances more aggressively, and rescale them by the
+	number of active nodes. (The intuition behind this optimization is
+	that the average out-distance changes very little after a join if
+	we have 1,000 active nodes.)
+
+	Optimized the constrained topology search to be faster. The
+	constraintWeight is now rather ad hoc, but in practice, a weight
+	of 10 means the constraints are always satisfied.
+
+	Warn if appear to be analyzing a protein alignment with -nt or a
+	nucleotide alignment without -nt
+
+	More compact help
+
+	Compact reporting of unexpected characters
+
+	Progress indicator (unless running with -quiet)
+
+Version 1.0.5: April 8, 2009
+
+	Added -intree and -intree1 options to specify a starting tree
+	before doing NNIs and/or local bootstrap.
+
+	Corrected a bug in estimating how many rounds of NNIs to do if
+	analyzing multiple alignments with the -n option (#NNIs was being
+	set only from the first alignment's size)
+
+Version 1.0.4: February 4, 2009
+
+        Corrected a bug in the local bootstrap that led to overly low
+	support values for splits that are surrounded by very
+	closely-related sequences (distances of 0.01 or less).
+
+Version 1.0.3: January 7, 2009
+
+	Added constrained topology search
+
+Version 1.0.2: December 15, 2008
+
+	Add the -pseudo option
+
+Version 1.0.1: October 27, 2008
+
+	Report the total length of the tree (unless using -quiet).
+
+	Improvements to the documentation (if you run it with -help) and
+	to the comments, especially the long comment at the beginning of
+	the code.
+
+	Comment out malloc.h, unless using TRACK_MEMORY, so that it
+	compiles on Macs.
+
+Version 1.0.0: September 3, 2008
+
+	Added nearest-neighbor interchanges (NNIs) according to a
+	minimum-evolution criterion. This is done in a similar way as in
+	FastME, but FastTree uses profiles to speed the computation and
+	uses weighted joins (inspired by BIONJ) to compute profiles of
+	internal nodes.  This change gives significant improvements in the
+	accuracy of FastTree, partly because the NNIs are beneficial and
+	partly because FastTree corrects distances for multiple
+	substitutions (e.g., uses Jukes-Cantor or Poisson-corrected
+	distances) when doing NNIs but not during the initial
+	neighbor-joining phase.
+
+	Optimized the implementation of local bootstrap and replaced the
+	probabilistic local supports, which do not transfer well to
+	log-corrected distances, with the local bootstrap.
+
+	Eliminated crashes on alignments with large numbers of
+	highly-gapped and non-overlapping sequences, by adding checks to
+	avoid divide-by-zero errors.
+
+Version 0.9.1: April 22, 2008
+
+	Fixed bug that crashed windows version if using top-hits
+	heuristic. Fixing this bug also leads to (rare) changes to
+	results under Linux.
+
+	Allow lower-case letters in input alignments.
+
+Version 0.9: Initial release, April 15, 2008
