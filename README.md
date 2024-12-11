@@ -2,7 +2,7 @@ FastTree infers approximately-maximum-likelihood phylogenetic trees from alignme
 
 See [documentation](https://morgannprice.github.io/fasttree/)
 and
-[installation instructions](https://morgannprice.github.io/fasttree#install),
+[compilation instructions](https://morgannprice.github.io/fasttree#install),
 or download executables for
 Linux ([double-precision](https://morgannprice.github.io/fasttree/FastTreeDbl)
 or [single-precision](https://morgannprice.github.io/fasttree/FastTree))
