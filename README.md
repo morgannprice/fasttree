@@ -7,4 +7,4 @@ or download executables for
 Linux ([double-precision](https://morgannprice.github.io/fasttree/FastTreeDbl)
 or [single-precision](https://morgannprice.github.io/fasttree/FastTree))
 or Windows
-([single-precision command-line executable] (https://morgannprice.github.io/fasttree/FastTree.exe))
+([single-precision command-line executable](https://morgannprice.github.io/fasttree/FastTree.exe))
