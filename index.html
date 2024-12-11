@@ -12,7 +12,8 @@ FastTree can handle alignments with up to a million of sequences in a reasonable
 For large alignments, FastTree is 100-1,000 times faster than
 <A HREF="http://www.atgc-montpellier.fr/phyml/">PhyML 3.0</A> or
 <A HREF="https://cme.h-its.org/exelixis/web/software/raxml/">RAxML 7</A>.
-FastTree is open-source software -- you can download the code <A HREF="#Install">below</A>.
+FastTree is open-source software -- you can download the code <A HREF="#Install">below</A> or from the
+<A HREF="https://github.com/morgannprice/fasttree">GitHub repository</A>.
 </P>
 
 <P>FastTree is more accurate than PhyML 3 with default settings,
@@ -39,7 +40,6 @@ To quickly estimate the reliability of each split in the tree, FastTree computes
 <LI><A HREF="#Matrix">Modifying the transition matrix</A>
 </UL></LI>
 <LI><A HREF="#FAQ">Frequently Asked Questions</A></LI>
-<LI><A HREF="#Contact">Contact us</A></LI>
 </UL>
 
 <P>These papers describe FastTree: the first paper describes FastTree 1.0, and the second paper describes heuristic minimum-evolution SPR moves, maximum-likelihood NNIs, and SH-like local supports. We have also eliminated the O(N<sup>2</sup>) steps in the neighbor-joining phase,
@@ -88,9 +88,9 @@ However, this will be corrected in the next stage.</P>
 
 <P>FastTree then tries to reduce the length of the tree,
 using a mix of
-<A HREF="http://www.hyphy.org/docs/analyses/methods/nni.html">nearest-neighbor interchanges</A> (NNIs)
+<A HREF="https://en.wikipedia.org/wiki/Tree_rearrangement">nearest-neighbor interchanges</A> (NNIs)
 and
-<A HREF="http://www.hyphy.org/docs/analyses/methods/spr.html">subtree-prune-regraft moves</A> (SPRs).
+subtree-prune-regraft moves (SPRs).
 These "balanced minimum-evolution" rearrangements are roughly the same as what
 <A HREF="http://atgc.lirmm.fr/fastme/">FastME</A> does, but because FastTree uses profiles instead of distances,
 it is much faster.
@@ -153,7 +153,7 @@ phylip's
 to generate resampled alignments, the -n option to FastTree to
 analyze all of the resampled alignments with one command, and
 <A HREF="treecmp.html">CompareToBootstrap.pl</A> (included in this
-repository) to compare the original tree to the resampled trees.  For
+<A HREF="https://github.com/morgannprice/fasttree">repository</A>) to compare the original tree to the resampled trees.  For
 alignments with thousands or tens of thousands of sequences, we
 recommend using the tree for the full alignment as the starting tree
 for each resampled replicate (the -intree1 option). This "fast global"
@@ -183,6 +183,7 @@ which splits in the tree are reliable. FastTree will still do this if you turn o
 </LI>
 <LI><A HREF="FastTree.exe">Windows command-line executable (no SSE)</A></LI>
 <LI><A HREF="FastTree.c">C code</A></LI>
+<LI><A HREF="https://github.com/morgannprice/fasttree">code repository</A></LI>
 </UL>
 
 If you use a Mac or other platform not included above, download <A HREF="FastTree.c">FastTree.c</A> and run
@@ -203,7 +204,7 @@ We have also heard that the -finline-functions option can cause an error. You ca
 
 <P>FastTree is open source software -- you are free to modify and redistribute it as you wish. If you do make any improvements to FastTree, please <A HREF="mailto:fasttree@microbesonline.org">send them to us</A> so we can incorporate your changes into the main version.</P>
 
-<P>Old versions: see <A HREF="ChangeLog.txt">Change log</A> or <A HREF="old">old versions of the code</A>.
+<P>Old versions: see <A HREF="ChangeLog.txt">Change log</A> or <A HREF="https://github.com/morgannprice/fasttree/tree/main/old">old versions of the code</A>.
 
 <H3><A NAME="Usage">Running FastTree</A></H3>
 
@@ -348,7 +349,7 @@ most of the splits that are found by these methods but missed by FastTree have p
 
 <P>Technical details: Topological accuracy is the percentage of splits in the true trees that were present in the inferred trees.
 The protein simulations are described in the
-<A HREF="http://mbe.oxfordjournals.org/cgi/content/abstract/msp077?ijkey=DtzbXulQ86zzROU&keytype=ref">MBE paper</A>
+<A HREF="https://pmc.ncbi.nlm.nih.gov/articles/PMC2693737/">MBE paper</A>
 and include rate variation across sites and realistic gaps.
 The nucleotide simulations were based on a large 16S tree and were produced similarly. Large neighbor-joining trees were computed with NINJA.
 Maximum-likelihood distances were computed with phylip's protdist. Log-corrected distances were computed with FastTree's -makematrix option.
@@ -373,7 +374,7 @@ The right-most bin includes the strongly supported splits (0.95 to 1.0). Only 16
 <TR><TD>PhyML3 <small>JC+&Gamma;<sub>4</sub></small></TD><TD>-168,702</TD></TR>
 </TABLE>
 <P>Technical details: To do a fair comparison of tree topologies, branch lengths were reoptimized with RAxML and the GTR+&Gamma;<sub>4</sub> model. PhyML was run with default settings (no SPR moves).
-The 16S alignment was taken from <A HREF="http://greengenes.lbl.gov/">GreenGenes</A>.
+The 16S alignment was taken from <A HREF="https://pmc.ncbi.nlm.nih.gov/articles/PMC1489311/">GreenGenes</A>.
 The individual alignments of 500 sequences are available <A HREF="16S_500.tar.gz">here</A>.
 </P>
 
@@ -385,7 +386,7 @@ The individual alignments of 500 sequences are available <A HREF="16S_500.tar.gz
 <TR><TD>PhyML3 <small>JTT+&Gamma;<sub>4</sub></small></TD><TD>-207,156</TD></TR>
 </TABLE>
 <P>Technical details: To do a fair comparison of tree topologies, branch lengths were reoptimized with RAxML and the JTT+&Gamma;<sub>4</sub> model. PhyML was run with default settings (no SPR moves).
-The COG alignments are described in the <A HREF="http://mbe.oxfordjournals.org/cgi/content/abstract/msp077?ijkey=DtzbXulQ86zzROU&keytype=ref">MBE paper</A> and are available <A HREF="COG_500.tar.gz">here</A>.
+The COG alignments are described in the <A HREF="https://pmc.ncbi.nlm.nih.gov/articles/PMC2693737/">MBE paper</A> and are available <A HREF="COG_500.tar.gz">here</A>.
 </P>
 
 <H3><A NAME="OpenMP">Multi-threaded FastTree with OpenMP</A></H3>
@@ -650,7 +651,7 @@ These likelihoods should be comparable across runs.</P>
 options, FastTree will report per-site likelihoods
 in a log file. (It will also report the per-site likelihood for each rate
 category.) You can use a perl script,
-<A HREF="GammaLogToPaup.pl">GammaLogToPaup.pl</A> (included in this repository), on two or more of these log files
+<A HREF="https://github.com/morgannprice/fasttree/blob/main/GammaLogToPaup.pl">GammaLogToPaup.pl</A> (included in this repository), on two or more of these log files
 to reformat this information for use with
 <A HREF="https://stat.sys.i.kyoto-u.ac.jp/prog/consel/">CONSEL</A>,
 which can perform the Shimodaira-Hasegawa (SH) test
@@ -674,11 +675,11 @@ where makermt, consel, and catpv are from the CONSEL package.
 
 <H3><A NAME="Root">What does the rooting of the tree mean?</A></H3>
 
-FastTree's placement of the root is arbitrary and is not biologically meaningful. To place the root accurately, you need outside information beyond what is in the alignment. If you do not have such information, another common approach is to use the midpoint, so that the maximum distance from the root to any leaf is minimized. This makes sense if the sequences are evolving according to a molecular clock. Most tree viewers can reroot a tree, but for huge trees I use the <A HREF="reroot.pl">reroot.pl</A> script (included in this repository).
+FastTree's placement of the root is arbitrary and is not biologically meaningful. To place the root accurately, you need outside information beyond what is in the alignment. If you do not have such information, another common approach is to use the midpoint, so that the maximum distance from the root to any leaf is minimized. This makes sense if the sequences are evolving according to a molecular clock. Most tree viewers can reroot a tree, but for huge trees I use the <A HREF="https://github.com/morgannprice/fasttree/blob/main/reroot.pl">reroot.pl</A> script (included in this repository).
 
 <H3><A NAME="Deterministic">Is FastTree deterministic?</H3>
 
-<P>The single-threaded version of FastTree is deterministic and rerunning the same version of FastTree on the same alignment on the same computer with the same settings should give identical results. There can be differences in results across platforms due to numerical issues, but the resulting trees should have nearly identical likelihoods. The local-bootstrap support values are derived using a random number generator and will vary from run to run if you modify the seed.</P>
+<P>The single-threaded version of FastTree is deterministic and rerunning the same version of FastTree on the same alignment on the same computer with the same settings should give identical results. There can be differences in results across platforms due to numerical issues, but the resulting trees should have nearly identical likelihoods. (Numerical issues can be minimized by using the double-precision version.) The local-bootstrap support values are derived using a random number generator and will vary from run to run if you modify the seed.</P>
 
 <P>FastTreeMP may not be entirely deterministic. It is theoretically possible for changes in the order that threads are executed to affect heuristic search during the neighor-joining phase. This is unlikely to affect the quality of the final tree but there may be subtle differences.</P>
 
@@ -688,7 +689,7 @@ If your alignment contains identical sequences and the input tree places these i
 
 <H3><A NAME="GenomeWide">Why does FastTree use so much memory on whole-genome alignments?</H3>
 
-<P>FastTree is optimized for very alignments with very large numbers of
+<P>FastTree is optimized for alignments with very large numbers of
 sequences, not for very wide alignments.  By default, FastTree uses 1,000
 resamples to estimate the support for each split, and it uses 4 *
 1,000 * L bytes of memory for this. That comes to 4 GB of RAM per million positions. You can eliminate the support value
