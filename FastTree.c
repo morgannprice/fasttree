@@ -42,16 +42,21 @@
 
 /*
  * To compile FastTree, do:
- * gcc -Wall -O3 -finline-functions -funroll-loops -o FastTree -lm FastTree.c
- * Use -DNO_SSE to turn off use of SSE3 instructions
- *  (should not be necessary because compiler should not set __SSE__ if
- *  not available, and modern mallocs should return 16-byte-aligned values)
+ * gcc -march=native -funroll-loops -Wall -O3 -fopenmp-simd -funsafe-math-optimizations -o FastTree -lm FastTree.c
  * Use -DOPENMP -fopenmp to use multiple threads (note, old versions of gcc
  *   may not support -fopenmp)
  * Use -DTRACK_MEMORY if you want detailed reports of memory usage,
  * but results are not correct above 4GB because mallinfo stores int values.
  * It also makes FastTree run significantly slower.
- *
+ * 
+ * NOTE: -march=native compiles for the current machine's CPU, which may not
+ * work on other machines.  A more conservative choice would be x86-64-v3 (circa 2013).
+ * __attribute__((target_clones(...))) is probably a good idea but is not used here yet.
+ * 
+ * -funroll-loops makes the executable about 25% larger and about 5% faster.
+ */
+
+/*
  * To get usage guidance, do:
  * FastTree -help
  *
@@ -305,43 +310,63 @@
 #include <omp.h>
 #endif
 
-/* By default, tries to compile with SSE instructions for greater speed.
-   But if compiled with -DUSE_DOUBLE, uses double precision instead of single-precision
-   floating point (2x memory required), does not use SSE, and allows much shorter
-   branch lengths.
-*/
-#ifdef __SSE__
-#if !defined(NO_SSE) && !defined(USE_DOUBLE)
-#define USE_SSE3
-#endif
-#endif
+/* If compiled with -DUSE_DOUBLE, uses double precision instead of single-precision
+   floating point (2x memory required), and allows much shorter branch lengths.
 
+   If compiled with -DUSE_SSE3 and the compiler supports SSE3 and using single-precision,
+   enable the handwritten SSE3 intrinsics.  Otherwise, use OpenMP SIMD hints on loops
+   and rely on the compiler to vectorize the code.
+*/
 
 #ifdef USE_DOUBLE
-#define SSE_STRING "Double precision (No SSE3)"
+#undef USE_SSE3
+#define SSE_STRING "Double precision"
 typedef double numeric_t;
 #define ScanNumericSpec "%lf"
 #else
 typedef float numeric_t;
+#if defined(USE_SSE3) && defined(__SSE3__)
+#include <xmmintrin.h>
+#define SSE_STRING "Single precision, SSE3"
+#else
+#define SSE_STRING "Single precision"
+#endif
 #define ScanNumericSpec "%f"
 #endif
 
-#ifdef USE_SSE3
-#define SSE_STRING "SSE3"
-#define ALIGNED __attribute__((aligned(16)))
-#define IS_ALIGNED(X) ((((unsigned long) new) & 15L) == 0L)
-#include <xmmintrin.h>
+#define ALIGN 64
+#define IS_ALIGNED(p)    (((uintptr_t)(p) & (ALIGN-1)) == 0)
 
-#else
+#define ALIGNED __attribute__((aligned(ALIGN)))
+#define ASSUME(x) __attribute((assume(x)))
 
-#define ALIGNED 
-#define IS_ALIGNED(X) 1
-
-#ifndef USE_DOUBLE
-#define SSE_STRING "No SSE3"
+#ifndef __GNUC__
+#define __attribute__(x) // no-op
+#define ALIGNED // alignas(ALIGN)?
+#ifdef _MSC_VER 
+#define ASSUME(x) __assume(x)
+#endif
 #endif
 
-#endif /* USE_SSE3 */
+// aligned_alloc or _aligned_malloc
+#ifdef _WIN32
+#include <malloc.h>
+#define aligned_alloc(_a, _s) _aligned_malloc(_s, _a)
+#define aligned_free _aligned_free
+#elif __STDC_VERSION__ >= 201112L
+#include <stdlib.h>
+#define aligned_free free
+#else
+#include <stdlib.h>
+static inline void *aligned_alloc(size_t alignment, size_t size) {
+  void *p;
+  if (posix_memalign(&p, alignment, size) != 0) {
+    return NULL; // Allocation failed
+  }
+  return p;
+}
+#define aligned_free free
+#endif
 
 #define FT_VERSION "2.1.11"
 
@@ -1178,13 +1203,13 @@ double ProfileDistPiece(unsigned int code1, unsigned int code2,
    fOut is assumed to exist (as from an outprofile)
    do not call unless weight of input profile > 0
  */
-void AddToFreq(/*IN/OUT*/numeric_t *fOut, double weight,
+void AddToFreq(/*IN/OUT*/numeric_t * ALIGNED fOut, double weight,
 	       unsigned int codeIn, /*OPTIONAL*/numeric_t *fIn,
 	       /*OPTIONAL*/distance_matrix_t *dmat);
 
 /* Divide the vector (of length nCodes) by a constant
    so that the total (unrotated) frequency is 1.0 */
-void NormalizeFreq(/*IN/OUT*/numeric_t *freq, distance_matrix_t *distance_matrix);
+void NormalizeFreq(/*IN/OUT*/numeric_t * ALIGNED freq, distance_matrix_t *distance_matrix);
 
 /* Allocate, if necessary, and recompute the codeDist*/
 void SetCodeDist(/*IN/OUT*/profile_t *profile, int nPos, distance_matrix_t *dmat);
@@ -1331,7 +1356,7 @@ numeric_t *MLSiteRates(int nRateCategories);
    site_loglk[nPos*iRate + j] is the log likelihood of site j with rate iRate
    The caller must free it.
 */
-double *MLSiteLikelihoodsByRate(/*IN*/NJ_t *NJ, /*IN*/numeric_t *rates, int nRateCategories);
+double *MLSiteLikelihoodsByRate(/*IN*/NJ_t *NJ, /*IN*/numeric_t * ALIGNED rates, int nRateCategories);
 
 typedef struct {
   double mult;			/* multiplier for the rates / divisor for the tree-length */
@@ -1350,7 +1375,7 @@ double GammaLogLk(/*IN*/siteratelk_t *s, /*OPTIONAL OUT*/double *gamma_loglk_sit
    and reports the rescaling value.
 */
 double RescaleGammaLogLk(int nPos, int nRateCats,
-			/*IN*/numeric_t *rates, /*IN*/double *site_loglk,
+			/*IN*/numeric_t * ALIGNED rates, /*IN*/double *site_loglk,
 			/*OPTIONAL*/FILE *fpLog);
 
 /* P(value<=x) for the gamma distribution with shape parameter alpha and scale 1/alpha */
@@ -1496,21 +1521,21 @@ double brent(double ax, double bx, double cx, double (*f)(double, void *), void 
 /* Vector operations, either using SSE3 or not
    Code assumes that vectors are a multiple of 4 in size
 */
-void vector_multiply(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, int n, /*OUT*/numeric_t *fOut);
-numeric_t vector_multiply_sum(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, int n);
-void vector_add_mult(/*IN/OUT*/numeric_t *f, /*IN*/numeric_t *add, numeric_t weight, int n);
+void vector_multiply(/*IN*/numeric_t * ALIGNED f1, /*IN*/numeric_t * ALIGNED f2, int n, /*OUT*/numeric_t *fOut);
+numeric_t vector_multiply_sum(/*IN*/numeric_t * ALIGNED f1, /*IN*/numeric_t * ALIGNED f2, int n);
+void vector_add_mult(/*IN/OUT*/numeric_t * ALIGNED f, /*IN*/numeric_t * ALIGNED add, numeric_t weight, int n);
 
 /* multiply the transpose of a matrix by a vector */
 void matrixt_by_vector4(/*IN*/numeric_t mat[4][MAXCODES], /*IN*/numeric_t vec[4], /*OUT*/numeric_t out[4]);
 
 /* sum(f1*fBy)*sum(f2*fBy) */
-numeric_t vector_dot_product_rot(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, /*IN*/numeric_t* fBy, int n);
+numeric_t vector_dot_product_rot(/*IN*/numeric_t * ALIGNED f1, /*IN*/numeric_t * ALIGNED f2, /*IN*/numeric_t* fBy, int n);
 
 /* sum(f1*f2*f3) */
-numeric_t vector_multiply3_sum(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, /*IN*/numeric_t* f3, int n);
+numeric_t vector_multiply3_sum(/*IN*/numeric_t * ALIGNED f1, /*IN*/numeric_t * ALIGNED f2, /*IN*/numeric_t* f3, int n);
 
-numeric_t vector_sum(/*IN*/numeric_t *f1, int n);
-void vector_multiply_by(/*IN/OUT*/numeric_t *f, /*IN*/numeric_t fBy, int n);
+numeric_t vector_sum(/*IN*/numeric_t * ALIGNED f1, int n);
+void vector_multiply_by(/*IN/OUT*/numeric_t * ALIGNED f, /*IN*/numeric_t fBy, int n);
 
 double clockDiff(/*IN*/struct timeval *clock_start);
 int timeval_subtract (/*OUT*/struct timeval *result, /*IN*/struct timeval *x, /*IN*/struct timeval *y);
@@ -4322,7 +4347,7 @@ void ProfileDist(profile_t *profile1, profile_t *profile2, int nPos,
    in that case code==NOCODE and in=NULL is possible, and then
    it will fail.
 */
-void AddToFreq(/*IN/OUT*/numeric_t *fOut,
+inline void AddToFreq(/*IN/OUT*/numeric_t * fOut,
 	       double weight,
 	       unsigned int codeIn, /*OPTIONAL*/numeric_t *fIn,
 	       /*OPTIONAL*/distance_matrix_t *dmat) {
@@ -4434,7 +4459,7 @@ profile_t *AverageProfile(profile_t *profile1, profile_t *profile2,
    Simply dividing by total_weight is not ideal because of roundoff error
    So compute total_freq instead
 */
-void NormalizeFreq(/*IN/OUT*/numeric_t *freq, distance_matrix_t *dmat) {
+void NormalizeFreq(/*IN/OUT*/numeric_t * ALIGNED freq, distance_matrix_t *dmat) {
   double total_freq = 0;
   int k;
   if (dmat != NULL) {
@@ -5979,7 +6004,7 @@ numeric_t *MLSiteRates(int nRateCategories) {
   return(rates);
 }
 
-double *MLSiteLikelihoodsByRate(/*IN*/NJ_t *NJ, /*IN*/numeric_t *rates, int nRateCategories) {
+double *MLSiteLikelihoodsByRate(/*IN*/NJ_t *NJ, /*IN*/numeric_t * ALIGNED rates, int nRateCategories) {
   double *site_loglk = mymalloc(sizeof(double)*NJ->nPos*nRateCategories);
 
   /* save the original rates */
@@ -6121,7 +6146,7 @@ double OptMult(double mult, void *data) {
 }
 
 /* Input site_loglk must be for each rate */
-double RescaleGammaLogLk(int nPos, int nRateCats, /*IN*/numeric_t *rates, /*IN*/double *site_loglk,
+double RescaleGammaLogLk(int nPos, int nRateCats, /*IN*/numeric_t * ALIGNED rates, /*IN*/double *site_loglk,
 			 /*OPTIONAL*/FILE *fpLog) {
   siteratelk_t s = { /*mult*/1.0, /*alpha*/1.0, nPos, nRateCats, rates, site_loglk };
   double fx, f2x;
@@ -8446,7 +8471,7 @@ void ResetTopVisible(/*IN/UPDATE*/NJ_t *NJ,
      Note that visible(i) -> j does not necessarily imply visible(j) -> i,
      so we store what the pairing was (or -1 for not used yet)
    */
-  int *inTopVisible = malloc(sizeof(int) * NJ->maxnodes);
+  int *inTopVisible = mymalloc(sizeof(int) * NJ->maxnodes);
   int i;
   for (i = 0; i < NJ->maxnodes; i++)
     inTopVisible[i] = -1;
@@ -8782,7 +8807,7 @@ double pnorm(double x)
 
 void *mymalloc(size_t sz) {
   if (sz == 0) return(NULL);
-  void *new = malloc(sz);
+  void *new = aligned_alloc(ALIGN, sz);
   if (new == NULL) {
     fprintf(stderr, "Out of memory\n");
     exit(1);
@@ -8841,7 +8866,7 @@ void *myrealloc(void *data, size_t szOld, size_t szNew, bool bCopy) {
 
 void *myfree(void *p, size_t sz) {
   if(p==NULL) return(NULL);
-  free(p);
+  aligned_free(p);
   mymallocUsed -= sz;
   return(NULL);
 }
@@ -9875,7 +9900,8 @@ inline float mm_sum(register __m128 sum) {
 }
 #endif
 
-void vector_multiply(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, int n, /*OUT*/numeric_t *fOut) {
+void vector_multiply(/*IN*/numeric_t * ALIGNED f1, /*IN*/numeric_t * ALIGNED f2, int n, /*OUT*/numeric_t *fOut) {
+  ASSUME(n == 4 || n == 20);
 #ifdef USE_SSE3
   int i;
   for (i = 0; i < n; i += 4) {
@@ -9887,12 +9913,14 @@ void vector_multiply(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, int n, /*OUT*/num
   }
 #else
   int i;
+  #pragma omp simd
   for (i = 0; i < n; i++)
     fOut[i] = f1[i]*f2[i];
 #endif
 }
 
-numeric_t vector_multiply_sum(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, int n) {
+numeric_t vector_multiply_sum(/*IN*/numeric_t * ALIGNED f1, /*IN*/numeric_t * ALIGNED f2, int n) {
+  ASSUME(n == 4 || n == 20);
 #ifdef USE_SSE3
   if (n == 4)
     return(f1[0]*f2[0]+f1[1]*f2[1]+f1[2]*f2[2]+f1[3]*f2[3]);
@@ -9909,6 +9937,7 @@ numeric_t vector_multiply_sum(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, int n) {
 #else
   int i;
   numeric_t out = 0.0;
+  #pragma omp simd
   for (i=0; i < n; i++)
     out += f1[i]*f2[i];
   return(out);
@@ -9916,7 +9945,8 @@ numeric_t vector_multiply_sum(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, int n) {
 }
 
 /* sum(f1*f2*f3) */
-numeric_t vector_multiply3_sum(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, /*IN*/numeric_t* f3, int n) {
+numeric_t vector_multiply3_sum(/*IN*/numeric_t * ALIGNED f1, /*IN*/numeric_t * ALIGNED f2, /*IN*/numeric_t* f3, int n) {
+  ASSUME(n == 4 || n == 20);
 #ifdef USE_SSE3
   __m128 sum = _mm_setzero_ps();
   int i;
@@ -9931,13 +9961,15 @@ numeric_t vector_multiply3_sum(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, /*IN*/n
 #else
   int i;
   numeric_t sum = 0.0;
+  #pragma omp simd
   for (i = 0; i < n; i++)
     sum += f1[i]*f2[i]*f3[i];
   return(sum);
 #endif
 }
 
-numeric_t vector_dot_product_rot(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, /*IN*/numeric_t *fBy, int n) {
+numeric_t vector_dot_product_rot(/*IN*/numeric_t * ALIGNED f1, /*IN*/numeric_t * ALIGNED f2, /*IN*/numeric_t * ALIGNED fBy, int n) {
+  ASSUME(n == 20);
 #ifdef USE_SSE3
   __m128 sum1 = _mm_setzero_ps();
   __m128 sum2 = _mm_setzero_ps();
@@ -9955,6 +9987,7 @@ numeric_t vector_dot_product_rot(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, /*IN*
   int i;
   numeric_t out1 = 0.0;
   numeric_t out2 = 0.0;
+  #pragma omp simd
   for (i=0; i < n; i++) {
     out1 += f1[i]*fBy[i];
     out2 += f2[i]*fBy[i];
@@ -9963,12 +9996,14 @@ numeric_t vector_dot_product_rot(/*IN*/numeric_t *f1, /*IN*/numeric_t *f2, /*IN*
 #endif
 }
 
-numeric_t vector_sum(/*IN*/numeric_t *f1, int n) {
+numeric_t vector_sum(/*IN*/numeric_t * ALIGNED f1, int n) {
+  ASSUME(n == 20);
+  numeric_t out = 0.0;
+  int i;
 #ifdef USE_SSE3
   if (n==4)
     return(f1[0]+f1[1]+f1[2]+f1[3]);
   __m128 sum = _mm_setzero_ps();
-  int i;
   for (i = 0; i < n; i+=4) {
     __m128 a;
     a = _mm_load_ps(f1+i);
@@ -9976,15 +10011,15 @@ numeric_t vector_sum(/*IN*/numeric_t *f1, int n) {
   }
   return(mm_sum(sum));
 #else
-  numeric_t out = 0.0;
-  int i;
+  #pragma omp simd
   for (i = 0; i < n; i++)
     out += f1[i];
   return(out);
 #endif
 }
 
-void vector_multiply_by(/*IN/OUT*/numeric_t *f, /*IN*/numeric_t fBy, int n) {
+void vector_multiply_by(/*IN/OUT*/numeric_t * ALIGNED f, /*IN*/numeric_t fBy, int n) {
+  ASSUME(n == 4 || n == 20);
   int i;
 #ifdef USE_SSE3
   __m128 c = _mm_set1_ps(fBy);
@@ -9995,12 +10030,14 @@ void vector_multiply_by(/*IN/OUT*/numeric_t *f, /*IN*/numeric_t fBy, int n) {
     _mm_store_ps(f+i,b);
   }
 #else
+  #pragma omp simd
   for (i = 0; i < n; i++)
     f[i] *= fBy;
 #endif
 }
 
-void vector_add_mult(/*IN/OUT*/numeric_t *fTot, /*IN*/numeric_t *fAdd, numeric_t weight, int n) {
+void vector_add_mult(/*IN/OUT*/numeric_t * ALIGNED fTot, /*IN*/numeric_t * ALIGNED fAdd, numeric_t weight, int n) {
+  ASSUME(n == 4 || n == 20);
 #ifdef USE_SSE3
   int i;
   __m128 w = _mm_set1_ps(weight);
@@ -10012,6 +10049,7 @@ void vector_add_mult(/*IN/OUT*/numeric_t *fTot, /*IN*/numeric_t *fAdd, numeric_t
   }
 #else
   int i;
+  #pragma omp simd
   for (i = 0; i < n; i++)
     fTot[i] += fAdd[i] * weight;
 #endif
@@ -10031,6 +10069,7 @@ void matrixt_by_vector4(/*IN*/numeric_t mat[4][MAXCODES], /*IN*/numeric_t vec[4]
   _mm_store_ps(out, o);
 #else
   int j,k;
+  #pragma omp simd
   for (j = 0; j < 4; j++) {
     double sum = 0;
     for (k = 0; k < 4; k++)
