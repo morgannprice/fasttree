@@ -305,20 +305,24 @@
 #include <omp.h>
 #endif
 
-/* By default, tries to compile with SSE instructions for greater speed.
-   But if compiled with -DUSE_DOUBLE, uses double precision instead of single-precision
-   floating point (2x memory required), does not use SSE, and allows much shorter
-   branch lengths.
+/* As of version 2.2.0, use double-precision by default. On modern x86
+   machines (after ~2016), this no longer has much performance
+   penalty, as the compiler will use AVX2 instructions. But it does
+   increase memory usage by 2x.
+
+   If USE_SINGLE is set for single-precision, uses SSE instructions
+   unless NO_SEE is set.
 */
-#ifdef __SSE__
-#if !defined(NO_SSE) && !defined(USE_DOUBLE)
+#ifndef USE_SINGLE
+#define USE_DOUBLE
+#endif
+
+#if defined(_SSE__) && defined(USE_SINGLE) && !defined(NO_SSE)
 #define USE_SSE3
 #endif
-#endif
-
 
 #ifdef USE_DOUBLE
-#define SSE_STRING "Double precision (No SSE3)"
+#define SSE_STRING "Double precision"
 typedef double numeric_t;
 #define ScanNumericSpec "%lf"
 #else
@@ -343,7 +347,7 @@ typedef float numeric_t;
 
 #endif /* USE_SSE3 */
 
-#define FT_VERSION "2.1.11"
+#define FT_VERSION "2.2.0"
 
 char *usage =
   "  FastTree protein_alignment > tree\n"
@@ -9523,7 +9527,7 @@ int *FreePath(int *path, NJ_t *NJ) {
 }
 
 transition_matrix_t *CreateGTR(double *r/*ac ag at cg ct gt*/, double *f/*acgt*/) {
-  double matrix[4][MAXCODES];
+  double matrix[MAXCODES][MAXCODES];
   assert(nCodes==4);
   int i, j;
   /* Place rates onto a symmetric matrix, but correct by f(target), so that

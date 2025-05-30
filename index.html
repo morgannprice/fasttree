@@ -1,11 +1,11 @@
 <HTML>
 <HEAD>
-<TITLE>FastTree 2.1: Approximately-Maximum-Likelihood Trees for Large Alignments</TITLE>
+<TITLE>FastTree 2.2: Approximately-Maximum-Likelihood Trees for Large Alignments</TITLE>
 
 </HEAD>
 <BODY>
 
-<H2>FastTree 2.1: Approximately-Maximum-Likelihood Trees for Large Alignments</H2>
+<H2>FastTree 2.2: Approximately-Maximum-Likelihood Trees for Large Alignments</H2>
 
 <P>FastTree infers approximately-maximum-likelihood phylogenetic trees from alignments of nucleotide or protein sequences.
 FastTree can handle alignments with up to a million of sequences in a reasonable amount of time and memory.
@@ -175,30 +175,29 @@ which splits in the tree are reliable. FastTree will still do this if you turn o
 <P>FastTree 2.1.11 is available as</P>
 
 <UL>
-<LI><A HREF="FastTree">Linux 64-bit executable (+SSE)</A>
+<LI><A HREF="FastTree">Linux 64-bit executable (AVX2 required)</A>
 <UL>
-<LI><A HREF="FastTreeDbl">Double-precision executable</A> for nearly-identical sequences (see <A HREF="#BranchLen">explanation</A>)</LI>
-<LI><A HREF="FastTreeMP">Multi-threaded executable (+SSE +OpenMP)</A> (see <A HREF="#OpenMP">usage guide)</LI>
+<LI><A HREF="FastTreeMP">Multi-threaded executable (+OpenMP)</A> (see <A HREF="#OpenMP">usage guide)</LI>
 </UL>
 </LI>
-<LI><A HREF="FastTree.exe">Windows command-line executable (no SSE)</A></LI>
+<LI><A HREF="FastTree.exe">Windows command-line executable (AVX2 required SSE)</A></LI>
 <LI><A HREF="FastTree.c">C code</A></LI>
 <LI><A HREF="https://github.com/morgannprice/fasttree">code repository</A></LI>
 </UL>
 
 If you use a Mac or other platform not included above, download <A HREF="FastTree.c">FastTree.c</A> and run
-<pre>gcc -O3 -finline-functions -funroll-loops -Wall -o FastTree FastTree.c -lm</pre>
+<pre>gcc -O3 -fopenmp-simd -funsafe-math-optimizations -march=native -o FastTree FastTree.c -lm
+</pre>
 
 (<A HREF="http://gcc.gnu.org/">gcc</A> is installed on many Mac OS X and Unix machines. If you use a Mac, you may need to install it from
-<A HREF="http://developer.apple.com/xcode/">xcode</A>. gcc is also available for virtually every platform.) Note that FastTree will try to use <A HREF="http://en.wikipedia.org/wiki/SSE3">SSE2/SSE3</A> instructions to speed up some inner loops. This will not work on many Windows or Mac machines. If FastTree will not run, then try compiling it with this command instead:
+<A HREF="http://developer.apple.com/xcode/">xcode</A>. gcc is also available for virtually every platform.)
 
-<pre>gcc -DNO_SSE -O3 -finline-functions -funroll-loops -Wall -o FastTree FastTree.c -lm</pre>
-
-We have also heard that the -finline-functions option can cause an error. You can omit this option.
+<P>We have also heard that the -finline-functions option can cause an error. You can omit this option.
 
 <P>If you want to build the multi-threaded "FastTreeMP," use
 
-<pre>gcc -DOPENMP -fopenmp -O3 -finline-functions -funroll-loops -Wall -o FastTreeMP FastTree.c -lm</pre>
+<pre>gcc -DOPENMP -O3 -fopenmp -fopenmp-simd -funsafe-math-optimizations -march=native -o FastTree FastTree.c -lm
+</pre>
 
 (The OpenMP version may not compile on some versions of Mac OS X unless you install a different version of gcc.) See <A HREF="#OpenMP">here</A> for more information about using FastTreeMP</A>.
 
@@ -422,7 +421,8 @@ off. However, in practice, the results are of the same quality.</P>
 </UL>
 </P>
 
-<P>The most important steps that are not parallelized are the minimum-evolution NNIs and SPRs. Also, the fine-grained nature of the parallelization of the ML code limits the speedup. It would be better to cut the tree at various splits (that would temporarily be held fixed) and then do independent tree computations on each piece. If you are interested in working on this, please let me know.</P>
+<P>The most important steps that are not parallelized are the minimum-evolution NNIs and SPRs. Also, the fine-grained nature of the parallelization of the ML code limits the speedup. It would be better to cut the tree at various splits (that would temporarily be held fixed) and then do independent tree computations on each piece.
+<A HREF="https://github.com/citiususc/veryfasttree">VeryFastTree</A> is reported to support this.
 
 <H3><A NAME="Gamma20">CAT/Gamma20 Likelihoods</A></H3>
 
@@ -559,13 +559,9 @@ warnings for alignments that contain ambiguous 1-letter codes
 
 <H3><A NAME="BranchLen">Why does FastTree report so many branch lengths of 0.0005 or 0.0001, or even negative branch lengths?</B></H3>
 
-<P>By default, the maximum-likelihood phase of FastTree does not allow branch lengths of less than 0.0005, so unresolvable internal branches often end up with lengths of about 0.0005. (Before FastTree 2.1.7, the limit was 0.0001, so if you are using an older version, you may see many branch lengths of 0.0001 instead.)</P>
-
-<P>If you need to resolve very-short branch lengths accurately, you can use a double-precision version of FastTree. To do this, you need to compile it with -DUSE_DOUBLE and you need to use version 2.1.8 or later, e.g.
-
-<pre>gcc -DUSE_DOUBLE -O3 -finline-functions -funroll-loops -Wall -o FastTree FastTree.c -lm</pre>
-
 <P>If you run FastTree with -noml, then the minimum-evolution phase of FastTree may return branch lengths that are slightly less than zero. You can think of these negative branch lengths as noisy estimates of the actual branch length, which is presumably near zero. A negative branch length also usually implies a lack of confidence in the adjoining split.</P>
+
+<P>If you use the single-precision version of FastTree (which was the default before version 2.2.0), the maximum-likelihood phase of FastTree does not allow branch lengths of less than 0.0005, so unresolvable internal branches often end up with lengths of about 0.0005. (Before FastTree 2.1.7, the limit was 0.0001, so if you are using an older version, you may see many branch lengths of 0.0001 instead.). If you need to resolve very-short branch lengths accurately, you should use the double-precision version of FastTree.
 
 <H3><A NAME="faster">How do I get FastTree to run faster?</A></H3>
 
@@ -681,7 +677,7 @@ FastTree's placement of the root is arbitrary and is not biologically meaningful
 
 <P>The single-threaded version of FastTree is deterministic and rerunning the same version of FastTree on the same alignment on the same computer with the same settings should give identical results. There can be differences in results across platforms due to numerical issues, but the resulting trees should have nearly identical likelihoods. (Numerical issues can be minimized by using the double-precision version.) The local-bootstrap support values are derived using a random number generator and will vary from run to run if you modify the seed.</P>
 
-<P>FastTreeMP may not be entirely deterministic. It is theoretically possible for changes in the order that threads are executed to affect heuristic search during the neighor-joining phase. This is unlikely to affect the quality of the final tree but there may be subtle differences.</P>
+<P>FastTreeMP is not deterministic. Changes in the order that threads are executed can affect heuristic search during the neighor-joining phase. This is unlikely to affect the quality of the final tree but there may well be differences in the results.</P>
 
 <H3><A NAME="Intree">Why does -intree -nome -mllen change the tree topology in rare cases?</H3>
 
@@ -691,8 +687,8 @@ If your alignment contains identical sequences and the input tree places these i
 
 <P>FastTree is optimized for alignments with very large numbers of
 sequences, not for very wide alignments.  By default, FastTree uses 1,000
-resamples to estimate the support for each split, and it uses 4 *
-1,000 * L bytes of memory for this. That comes to 4 GB of RAM per million positions. You can eliminate the support value
+resamples to estimate the support for each split, and it uses 24 *
+1,000 * L bytes of memory for this. That comes to 24 GB of RAM per million positions. You can eliminate the support value
 computation with the -nosupport option, as the support values are
 probably meaningless for such wide alignments.  (Every split will
 probably have 100% support, but this does not indicate that the splits
@@ -701,11 +697,12 @@ between lineages, which is very unlikely to be true for such wide
 alignments.) You could also reduce the memory requirement 10-fold by
 using 100 resamples instead of 1,000 resamples (the -boot 100 option).
 
-<P>Even without resamples, FastTree requires around 21 * N * L bytes of
+<P>Even without resamples, FastTree requires around 37 * N * L bytes of
 memory for large nucleotide alignments if you use the generalized
-time-reversible model (-gtr). (For large amino acid alignments, the memory requirement is around 85 * N * L.
+time-reversible model (-gtr). (For large amino acid alignments, the memory requirement is around 165 * N * L.
+(Memory requirements are ~2x less if using single-precision.)
 For alignments with many sequences, there is an additional memory requirement during the neighbor joining phase of around 16 * N<sup>1.5</sup> bytes with default settings or 24 * N<sup>1.25</sup> bytes if using -fastest.)
-For genome-wide nucleotide alignments, memory usage will usually be a bit less than 21 * N * L with
+For genome-wide nucleotide alignments, memory usage will usually be a bit less with
 minimum-evolution FastTree (-noml option) or with the Jukes-Cantor
 model (the default) . For closely-related sequences (maximum divergence
 of less than 10%), you could also remove the invariant positions and
