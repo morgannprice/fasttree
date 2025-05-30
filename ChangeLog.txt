@@ -1,3 +1,23 @@
+Version 2.2.0: May 40, 2025
+
+	Changed the standard compilation options to take advantage of
+	auto-vectorization (i.e., AVX2 instructions for x86 machines). The relevant flags are
+           gcc -fopen-simd -march=native
+           or
+           gcc -fopen-simd -march=core-avx2
+	(On x86 machines, some versions of gcc will not produce avx2
+        code unless it is specifically requested.)  Thanks to Mingye
+        Wang for pointing out that this would be as fast as SSE3
+        (single-precision).
+
+        With these changes, single-precision floating point and
+        double-precision floating-point have similar performance. So,
+        by default, FastTree now uses double-precision. If you need
+        lower memory usage, you can compile it with -DUSE_SINGLE.
+
+        The 2.2.0 executables were compiled using gcc 15.1.0 (Linux)
+        or gcc 14.2.0 (windows, via msys2)
+
 Version 2.1.11: May 17, 2019
 
 	Added the -trans option to read a transition matrix (and
