@@ -528,7 +528,7 @@ This option is only supported for amino acid aligments and it only affects the m
 
 <P>Note that the transition matrix is usually not symmetric.
 
-<P>Use of a highly biased transition matrix can lead to numerical problems for single-precision FastTree. So for custom transition matrices, we recommend using the double-precision version of FastTree (compiled with -DUSE_DOUBLE).
+<P>Use of a highly biased transition matrix can lead to numerical problems for single-precision FastTree. So for custom transition matrices, we recommend using the double-precision version of FastTree (now the default).
 
 <H3><A NAME="FAQ">Frequently Asked Questions</A></H3>
 
@@ -572,6 +572,7 @@ warnings for alignments that contain ambiguous 1-letter codes
 <LI>Use the multi-threaded (OpenMP) version. With 3 CPUs, this typically gives speed-ups of 1.5 to 1.7x.
 <LI>Use -mlnni 4 to reduce the rounds of ML NNIs, or -noml to skip them altogether.</LI>
 <LI>Reduce the size of your alignment</LI>
+<LI>The single-precision version of FastTree (compiled with -DUSE_SINGLE) may be somewhat faster.
 </UL>
 
 <P>The -fastest option turns off local hill-climbing search during neighbor-joining and
@@ -687,8 +688,8 @@ If your alignment contains identical sequences and the input tree places these i
 
 <P>FastTree is optimized for alignments with very large numbers of
 sequences, not for very wide alignments.  By default, FastTree uses 1,000
-resamples to estimate the support for each split, and it uses 24 *
-1,000 * L bytes of memory for this. That comes to 24 GB of RAM per million positions. You can eliminate the support value
+resamples to estimate the support for each split, and it uses 8 *
+1,000 * L bytes of memory for this. That comes to 8 GB of RAM per million positions. You can eliminate the support value
 computation with the -nosupport option, as the support values are
 probably meaningless for such wide alignments.  (Every split will
 probably have 100% support, but this does not indicate that the splits
