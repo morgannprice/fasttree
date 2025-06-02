@@ -311,13 +311,13 @@
    increase memory usage by 2x.
 
    If USE_SINGLE is set for single-precision, uses SSE instructions
-   unless NO_SEE is set.
+   unless NO_SSE is set.
 */
 #ifndef USE_SINGLE
 #define USE_DOUBLE
 #endif
 
-#if defined(_SSE__) && defined(USE_SINGLE) && !defined(NO_SSE)
+#if defined(__SSE__) && defined(USE_SINGLE) && !defined(NO_SSE)
 #define USE_SSE3
 #endif
 
@@ -341,7 +341,7 @@ typedef float numeric_t;
 #define ALIGNED 
 #define IS_ALIGNED(X) 1
 
-#ifndef USE_DOUBLE
+#if defined(USE_SINGLE) && !defined(USE_SSE3)
 #define SSE_STRING "No SSE3"
 #endif
 
