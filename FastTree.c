@@ -288,6 +288,7 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 #include <assert.h>
 #include <math.h>
@@ -966,6 +967,58 @@ typedef struct {
   double delta;	    /* improvement in score for this node (or 0 if no change) */
   double support;   /* improvement of score for self over better of alternatives */
 } nni_stats_t;
+
+/* Checkpoint phases -- each corresponds to a natural boundary in the optimization loop */
+typedef enum {
+  CKPT_AFTER_NJ = 1,
+  CKPT_AFTER_ME_NNI = 2,
+  CKPT_AFTER_ME_SPR = 3,
+  CKPT_AFTER_ME_LENGTHS = 4,
+  CKPT_AFTER_ML_RECOMPUTE = 5,
+  CKPT_AFTER_MLLEN_ROUND = 6,
+  CKPT_AFTER_MLLEN_SETRATES = 7,
+  CKPT_AFTER_ML_INIT_OPT = 8,
+  CKPT_AFTER_ML_NNI = 9,
+  CKPT_AFTER_ML_NNI_SETRATES = 10,
+  CKPT_AFTER_ML_FINAL_OPT = 11
+} checkpoint_phase_t;
+
+#define CKPT_MAGIC 0x46544350  /* "FTCP" */
+#define CKPT_VERSION 1
+
+typedef struct {
+  checkpoint_phase_t phase;
+  int iRound;
+  int nniToDo;
+  int sprRemaining;
+  int spr;
+  int MLnniToDo;
+  int bConverged;
+  double lastloglk;
+  int resetGtr;
+  int bUseGtrFreq;
+  double gtrfreq[4];
+  int nRateCats;
+  int iMLlenRound;
+  int iMLlenMaxRound;
+  double dMLlenLastLogLk;
+  nni_stats_t *nni_stats; /* NULL if not applicable */
+  int has_gtr_reset;
+  double gtr_rates[6];
+  double gtr_freq[4];
+} checkpoint_data_t;
+
+void WriteCheckpoint(const char *filename, checkpoint_phase_t phase,
+		     NJ_t *NJ,
+		     int iRound, int nniToDo, int sprRemaining, int spr,
+		     int MLnniToDo, int bConverged, double lastloglk,
+		     int resetGtr, int bUseGtrFreq, double *gtrfreq,
+		     int nRateCats,
+		     int iMLlenRound, int iMLlenMaxRound, double dMLlenLastLogLk,
+		     nni_stats_t *nni_stats,
+		     double *gtr_rates, double *gtr_freq);
+
+checkpoint_data_t *ReadCheckpoint(const char *filename, /*IN/OUT*/NJ_t *NJ);
 
 /* One round of nearest-neighbor interchanges according to the
    minimum-evolution or approximate maximum-likelihood criterion.
@@ -1675,6 +1728,8 @@ int main(int argc, char **argv) {
   int nBootstrap = 1000;		/* If set, number of replicates of local bootstrap to do */
   int nRateCats = nDefaultRateCats;
   char *logfile = NULL;
+  char *checkpointFile = NULL;
+  char *restartFile = NULL;
   bool bUseGtr = false;
   bool bUseLg = false;
   bool bUseWag = false;
@@ -1901,6 +1956,12 @@ int main(int argc, char **argv) {
       logfile = argv[iArg];
     } else if (strcmp(argv[iArg],"-gamma") == 0) {
       gammaLogLk = true;
+    } else if (strcmp(argv[iArg],"-checkpoint") == 0 && iArg < argc-1) {
+      iArg++;
+      checkpointFile = argv[iArg];
+    } else if (strcmp(argv[iArg],"-restart") == 0 && iArg < argc-1) {
+      iArg++;
+      restartFile = argv[iArg];
     } else if (strcmp(argv[iArg],"-out") == 0 && iArg < argc-1) {
       iArg++;
       fpOut = fopen(argv[iArg],"w");
@@ -2189,6 +2250,43 @@ int main(int argc, char **argv) {
 			     fileName ? fileName : "standard input",
 			     aln->nSeq, unique->nUnique, aln->nPos, aln->names[aln->nSeq-1], aln->seqs[aln->nSeq-1]);
       FreeAlignmentSeqs(/*IN/OUT*/aln); /*no longer needed*/
+
+      /* Variables needed across checkpoint/resume boundaries -- declared here
+	 so they are in scope for goto targets */
+      int nniToDo, sprRemaining, MLnniToDo;
+      bool bConvergedME = false;
+      nni_stats_t *nni_stats = NULL;
+      double lastloglk = -1e20;
+      bool resetGtr = false;
+      bool bConvergedML = false;
+      int iMLnni = 0;
+      int me_nni_start = 0;
+      int ml_nni_start = 0;
+      int iMLlenRound = 0;
+      int iMLlenMaxRound = 0;
+      double dMLlenLastLogLk = -1e20;
+      double *saved_gtr_rates = NULL;
+      double *saved_gtr_freq = NULL;
+      checkpoint_data_t *ckpt = NULL;
+
+      if (restartFile != NULL) {
+	ckpt = ReadCheckpoint(restartFile, NJ);
+	/* Profiles are fully restored from checkpoint.
+	   For ML phases, also need to restore transmat if GTR was re-estimated,
+	   since transmat is needed for ML-NNI operations. */
+	if (ckpt->has_gtr_reset && ckpt->phase > CKPT_AFTER_ME_LENGTHS) {
+	  if (NJ->transmat != NULL)
+	    NJ->transmat = myfree(NJ->transmat, sizeof(transition_matrix_t));
+	  NJ->transmat = CreateGTR(ckpt->gtr_rates, ckpt->gtr_freq);
+	}
+
+	if (verbose)
+	  fprintf(stderr, "Resumed from checkpoint phase %d round %d\n",
+		  (int)ckpt->phase, ckpt->iRound);
+
+	goto ckpt_dispatch;
+      }
+
       if (fpInTree != NULL) {
 	if (intree1)
 	  fseek(fpInTree, 0L, SEEK_SET);
@@ -2211,27 +2309,93 @@ int main(int argc, char **argv) {
       long svProfileFreqAlloc = nProfileFreqAlloc;
       long svProfileFreqAvoid = nProfileFreqAvoid;
 #endif
-      int nniToDo = nni == -1 ? (int)(0.5 + 4.0 * log(NJ->nSeq)/log(2)) : nni;
-      int sprRemaining = spr;
-      int MLnniToDo = (MLnni != -1) ? MLnni : (int)(0.5 + 2.0*log(NJ->nSeq)/log(2));
+      nniToDo = nni == -1 ? (int)(0.5 + 4.0 * log(NJ->nSeq)/log(2)) : nni;
+      sprRemaining = spr;
+      MLnniToDo = (MLnni != -1) ? MLnni : (int)(0.5 + 2.0*log(NJ->nSeq)/log(2));
       if(verbose>0) {
 	if (fpInTree == NULL)
 	  fprintf(stderr, "Initial topology in %.2f seconds\n", clockDiff(&clock_start));
 	if (spr > 0 || nniToDo > 0 || MLnniToDo > 0)
 	  fprintf(stderr,"Refining topology: %d rounds ME-NNIs, %d rounds ME-SPRs, %d rounds ML-NNIs\n", nniToDo, spr, MLnniToDo);
-      }  
+      }
 
+      if (checkpointFile)
+	WriteCheckpoint(checkpointFile, CKPT_AFTER_NJ, NJ,
+			0, nniToDo, sprRemaining, spr, MLnniToDo, 0, -1e20,
+			0, bUseGtrFreq, gtrfreq, nRateCats, 0, 0, -1e20, NULL, NULL, NULL);
+
+      if (0) {
+	/* Checkpoint resume dispatch -- jumped to from restartFile block above */
+      ckpt_dispatch:
+#ifdef TRACK_MEMORY
+	; long svProfileFreqAlloc = nProfileFreqAlloc;
+	long svProfileFreqAvoid = nProfileFreqAvoid;
+#endif
+	nniToDo = ckpt->nniToDo;
+	sprRemaining = ckpt->sprRemaining;
+	MLnniToDo = ckpt->MLnniToDo;
+
+	switch (ckpt->phase) {
+	case CKPT_AFTER_NJ:
+	  goto ckpt_after_nj;
+	case CKPT_AFTER_ME_NNI:
+	  me_nni_start = ckpt->iRound;
+	  bConvergedME = ckpt->bConverged;
+	  nni_stats = ckpt->nni_stats;
+	  ckpt->nni_stats = NULL;
+	  goto ckpt_after_nj;
+	case CKPT_AFTER_ME_SPR:
+	  me_nni_start = ckpt->iRound;
+	  bConvergedME = ckpt->bConverged;
+	  nni_stats = ckpt->nni_stats;
+	  ckpt->nni_stats = NULL;
+	  goto ckpt_after_nj;
+	case CKPT_AFTER_ME_LENGTHS:
+	  goto ckpt_after_me_lengths;
+	case CKPT_AFTER_ML_RECOMPUTE:
+	  goto ckpt_after_ml_recompute;
+	case CKPT_AFTER_MLLEN_ROUND:
+	  iMLlenRound = ckpt->iMLlenRound;
+	  iMLlenMaxRound = ckpt->iMLlenMaxRound;
+	  dMLlenLastLogLk = ckpt->dMLlenLastLogLk;
+	  goto ckpt_after_ml_recompute;
+	case CKPT_AFTER_MLLEN_SETRATES:
+	  iMLlenRound = ckpt->iMLlenRound;
+	  iMLlenMaxRound = ckpt->iMLlenMaxRound;
+	  dMLlenLastLogLk = ckpt->dMLlenLastLogLk;
+	  goto ckpt_after_ml_recompute;
+	case CKPT_AFTER_ML_INIT_OPT:
+	  goto ckpt_after_ml_init_opt;
+	case CKPT_AFTER_ML_NNI:
+	  ml_nni_start = ckpt->iRound;
+	  bConvergedML = ckpt->bConverged;
+	  lastloglk = ckpt->lastloglk;
+	  nni_stats = ckpt->nni_stats;
+	  ckpt->nni_stats = NULL;
+	  goto ckpt_after_ml_nni_resume;
+	case CKPT_AFTER_ML_NNI_SETRATES:
+	  ml_nni_start = ckpt->iRound;
+	  bConvergedML = ckpt->bConverged;
+	  lastloglk = ckpt->lastloglk;
+	  nni_stats = ckpt->nni_stats;
+	  ckpt->nni_stats = NULL;
+	  goto ckpt_after_ml_nni_resume;
+	case CKPT_AFTER_ML_FINAL_OPT:
+	  goto ckpt_after_ml_final_opt;
+	}
+      }
+
+    ckpt_after_nj:
       if (nniToDo>0) {
-	int i;
-	bool bConverged = false;
-	nni_stats_t *nni_stats = InitNNIStats(NJ);
-	for (i=0; i < nniToDo; i++) {
+	if (nni_stats == NULL)
+	  nni_stats = InitNNIStats(NJ);
+	for (i=me_nni_start; i < nniToDo; i++) {
 	  double maxDelta;
-	  if (!bConverged) {
+	  if (!bConvergedME) {
 	    int nChange = NNI(/*IN/OUT*/NJ, i, nniToDo, /*use ml*/false, /*IN/OUT*/nni_stats, /*OUT*/&maxDelta);
 	    LogTree("ME_NNI%d",i+1, fpLog, NJ, aln->names, unique, bQuote);
 	    if (nChange == 0) {
-	      bConverged = true;
+	      bConvergedME = true;
 	      if (verbose>1)
 		fprintf(stderr, "Min_evolution NNIs converged at round %d -- skipping some rounds\n", i+1);
 	      if (fpLog)
@@ -2239,15 +2403,25 @@ int main(int argc, char **argv) {
 	    }
 	  }
 
+	  if (checkpointFile)
+	    WriteCheckpoint(checkpointFile, CKPT_AFTER_ME_NNI, NJ,
+			    i+1, nniToDo, sprRemaining, spr, MLnniToDo, bConvergedME, -1e20,
+			    0, bUseGtrFreq, gtrfreq, nRateCats, 0, 0, -1e20, nni_stats, NULL, NULL);
+
 	  /* Interleave SPRs with NNIs (typically 1/3rd NNI, SPR, 1/3rd NNI, SPR, 1/3rd NNI */
 	  if (sprRemaining > 0 && (nniToDo/(spr+1) > 0 && ((i+1) % (nniToDo/(spr+1))) == 0)) {
 	    SPR(/*IN/OUT*/NJ, maxSPRLength, spr-sprRemaining, spr);
 	    LogTree("ME_SPR%d",spr-sprRemaining+1, fpLog, NJ, aln->names, unique, bQuote);
 	    sprRemaining--;
 	    /* Restart the NNIs -- set all ages to 0, etc. */
-	    bConverged = false;
+	    bConvergedME = false;
 	    nni_stats = FreeNNIStats(nni_stats, NJ);
 	    nni_stats = InitNNIStats(NJ);
+
+	    if (checkpointFile)
+	      WriteCheckpoint(checkpointFile, CKPT_AFTER_ME_SPR, NJ,
+			      i+1, nniToDo, sprRemaining, spr, MLnniToDo, 0, -1e20,
+			      0, bUseGtrFreq, gtrfreq, nRateCats, 0, 0, -1e20, nni_stats, NULL, NULL);
 	  }
 	}
 	nni_stats = FreeNNIStats(nni_stats, NJ);
@@ -2267,7 +2441,13 @@ int main(int argc, char **argv) {
       UpdateBranchLengths(/*IN/OUT*/NJ);
       LogTree("ME_Lengths",0, fpLog, NJ, aln->names, unique, bQuote);
 
-      double total_len = 0;
+      if (checkpointFile)
+	WriteCheckpoint(checkpointFile, CKPT_AFTER_ME_LENGTHS, NJ,
+			0, nniToDo, sprRemaining, spr, MLnniToDo, 0, -1e20,
+			0, bUseGtrFreq, gtrfreq, nRateCats, 0, 0, -1e20, NULL, NULL, NULL);
+
+    ckpt_after_me_lengths:
+      ; double total_len = 0;
       int iNode;
       for (iNode = 0; iNode < NJ->maxnode; iNode++)
 	total_len += fabs(NJ->branchlength[iNode]);
@@ -2316,18 +2496,41 @@ int main(int argc, char **argv) {
 
 	/* Do maximum-likelihood computations */
 	/* Convert profiles to use the transition matrix */
-	distance_matrix_t *tmatAsDist = TransMatToDistanceMat(/*OPTIONAL*/NJ->transmat);
-	RecomputeProfiles(NJ, /*OPTIONAL*/tmatAsDist);
-	tmatAsDist = myfree(tmatAsDist, sizeof(distance_matrix_t));
-	double lastloglk = -1e20;
-	nni_stats_t *nni_stats = InitNNIStats(NJ);
-	bool resetGtr = nCodes == 4 && bUseGtr && !bUseGtrRates;
+	if (ckpt == NULL || ckpt->phase <= CKPT_AFTER_ME_LENGTHS) {
+	  distance_matrix_t *tmatAsDist = TransMatToDistanceMat(/*OPTIONAL*/NJ->transmat);
+	  RecomputeProfiles(NJ, /*OPTIONAL*/tmatAsDist);
+	  tmatAsDist = myfree(tmatAsDist, sizeof(distance_matrix_t));
+	}
+
+	if (checkpointFile)
+	  WriteCheckpoint(checkpointFile, CKPT_AFTER_ML_RECOMPUTE, NJ,
+			  0, nniToDo, 0, spr, MLnniToDo, 0, -1e20,
+			  (nCodes == 4 && bUseGtr && !bUseGtrRates) ? 1 : 0,
+			  bUseGtrFreq, gtrfreq, nRateCats, 0, 0, -1e20, NULL, NULL, NULL);
+
+      ckpt_after_ml_recompute:
+	lastloglk = -1e20;
+	if (nni_stats == NULL)
+	  nni_stats = InitNNIStats(NJ);
+	resetGtr = nCodes == 4 && bUseGtr && !bUseGtrRates;
 
 	if (MLlen) {
 	  int iRound;
 	  int maxRound = (int)(0.5 + log(NJ->nSeq)/log(2));
 	  double dLastLogLk = -1e20;
-	  for (iRound = 1; iRound <= maxRound; iRound++) {
+	  int roundStart = 1;
+
+	  /* Resume MLlen loop if checkpointed mid-loop */
+	  if (ckpt != NULL && (ckpt->phase == CKPT_AFTER_MLLEN_ROUND || ckpt->phase == CKPT_AFTER_MLLEN_SETRATES)) {
+	    roundStart = ckpt->iMLlenRound + 1;
+	    maxRound = ckpt->iMLlenMaxRound;
+	    dLastLogLk = ckpt->dMLlenLastLogLk;
+	    /* If CKPT_AFTER_MLLEN_SETRATES, rates are already restored from checkpoint */
+	    if (ckpt->phase == CKPT_AFTER_MLLEN_SETRATES)
+	      resetGtr = false; /* already done */
+	  }
+
+	  for (iRound = roundStart; iRound <= maxRound; iRound++) {
 	    int node;
 	    numeric_t *oldlength = (numeric_t*)mymalloc(sizeof(numeric_t)*NJ->maxnodes);
 	    for (node = 0; node < NJ->maxnode; node++)
@@ -2342,39 +2545,65 @@ int main(int argc, char **argv) {
 	    }
 	    oldlength = myfree(oldlength, sizeof(numeric_t)*NJ->maxnodes);
 	    double loglk = TreeLogLk(NJ, /*site_likelihoods*/NULL);
-	    bool bConverged = iRound > 1 && (dMaxChange < 0.001 || loglk < (dLastLogLk+treeLogLkDelta));
+	    bool bConv = iRound > 1 && (dMaxChange < 0.001 || loglk < (dLastLogLk+treeLogLkDelta));
 	    if (verbose)
 	      fprintf(stderr, "%d rounds ML lengths: LogLk %s= %.3lf Max-change %.4lf%s Time %.2f\n",
 		      iRound,
 		      exactML || nCodes != 20 ? "" : "~",
 		      loglk,
 		      dMaxChange,
-		      bConverged ? " (converged)" : "",
+		      bConv ? " (converged)" : "",
 		      clockDiff(&clock_start));
 	    if (fpLog)
 	      fprintf(fpLog, "TreeLogLk\tLength%d\t%.4lf\tMaxChange\t%.4lf\n",
 		      iRound, loglk, dMaxChange);
+
+	    if (checkpointFile)
+	      WriteCheckpoint(checkpointFile, CKPT_AFTER_MLLEN_ROUND, NJ,
+			      0, nniToDo, 0, spr, MLnniToDo, 0, -1e20,
+			      resetGtr ? 1 : 0, bUseGtrFreq, gtrfreq, nRateCats,
+			      iRound, maxRound, dLastLogLk, NULL, NULL, NULL);
+
 	    if (iRound == 1) {
 	      if (resetGtr)
 		SetMLGtr(/*IN/OUT*/NJ, bUseGtrFreq ? gtrfreq : NULL, fpLog);
 	      SetMLRates(/*IN/OUT*/NJ, nRateCats);
 	      LogMLRates(fpLog, NJ);
+
+	      if (checkpointFile)
+		WriteCheckpoint(checkpointFile, CKPT_AFTER_MLLEN_SETRATES, NJ,
+				0, nniToDo, 0, spr, MLnniToDo, 0, -1e20,
+				0, bUseGtrFreq, gtrfreq, nRateCats,
+				iRound, maxRound, loglk, NULL,
+				resetGtr ? NJ->transmat->eigenval : NULL,
+				resetGtr ? NJ->transmat->stat : NULL);
 	    }
-	    if (bConverged)
+	    dLastLogLk = loglk;
+	    if (bConv)
 	      break;
 	  }
 	}
 
 	if (MLnniToDo > 0) {
-	  /* This may help us converge faster, and is fast */
-	  OptimizeAllBranchLengths(/*IN/OUT*/NJ);
-	  LogTree("ML_Lengths%d",1, fpLog, NJ, aln->names, unique, bQuote);
+	  if (ckpt == NULL || ckpt->phase < CKPT_AFTER_ML_INIT_OPT) {
+	    /* This may help us converge faster, and is fast */
+	    OptimizeAllBranchLengths(/*IN/OUT*/NJ);
+	    LogTree("ML_Lengths%d",1, fpLog, NJ, aln->names, unique, bQuote);
+
+	    if (checkpointFile)
+	      WriteCheckpoint(checkpointFile, CKPT_AFTER_ML_INIT_OPT, NJ,
+			      0, nniToDo, 0, spr, MLnniToDo, 0, -1e20,
+			      resetGtr ? 1 : 0, bUseGtrFreq, gtrfreq, nRateCats,
+			      0, 0, -1e20, NULL, NULL, NULL);
+	  }
 	}
 
-	int iMLnni;
-	double maxDelta;
-	bool bConverged = false;
-	for (iMLnni = 0; iMLnni < MLnniToDo; iMLnni++) {
+      ckpt_after_ml_init_opt:
+      ckpt_after_ml_nni_resume:
+	if (nni_stats == NULL)
+	  nni_stats = InitNNIStats(NJ);
+	; double maxDelta;
+	for (iMLnni = ml_nni_start; iMLnni < MLnniToDo; iMLnni++) {
 	  int changes = NNI(/*IN/OUT*/NJ, iMLnni, MLnniToDo, /*use ml*/true, /*IN/OUT*/nni_stats, /*OUT*/&maxDelta);
 	  LogTree("ML_NNI%d",iMLnni+1, fpLog, NJ, aln->names, unique, bQuote);
 	  double loglk = TreeLogLk(NJ, /*site_likelihoods*/NULL);
@@ -2384,14 +2613,21 @@ int main(int argc, char **argv) {
 		    iMLnni+1,
 		    exactML || nCodes != 20 ? "" : "~",
 		    loglk, changes, maxDelta,  clockDiff(&clock_start),
-		    bConverged ? " (final)" : "");
+		    bConvergedML ? " (final)" : "");
 	  if (fpLog)
 	    fprintf(fpLog, "TreeLogLk\tML_NNI%d\t%.4lf\tMaxChange\t%.4lf\n", iMLnni+1, loglk, maxDelta);
-	  if (bConverged)
+
+	  if (checkpointFile)
+	    WriteCheckpoint(checkpointFile, CKPT_AFTER_ML_NNI, NJ,
+			    iMLnni+1, nniToDo, 0, spr, MLnniToDo, bConvergedML, loglk,
+			    resetGtr ? 1 : 0, bUseGtrFreq, gtrfreq, nRateCats,
+			    0, 0, -1e20, nni_stats, NULL, NULL);
+
+	  if (bConvergedML)
 	    break;		/* we did our extra round */
 	  if (bConvergedHere)
-	    bConverged = true;
-	  if (bConverged || iMLnni == MLnniToDo-2) {
+	    bConvergedML = true;
+	  if (bConvergedML || iMLnni == MLnniToDo-2) {
 	    /* last round uses high-accuracy seettings -- reset NNI stats to tone down heuristics */
 	    nni_stats = FreeNNIStats(nni_stats, NJ);
 	    nni_stats = InitNNIStats(NJ);
@@ -2408,9 +2644,15 @@ int main(int argc, char **argv) {
 	      SetMLGtr(/*IN/OUT*/NJ, bUseGtrFreq ? gtrfreq : NULL, fpLog);
 	    SetMLRates(/*IN/OUT*/NJ, nRateCats);
 	    LogMLRates(fpLog, NJ);
+
+	    if (checkpointFile)
+	      WriteCheckpoint(checkpointFile, CKPT_AFTER_ML_NNI_SETRATES, NJ,
+			      iMLnni+1, nniToDo, 0, spr, MLnniToDo, bConvergedML, loglk,
+			      0, bUseGtrFreq, gtrfreq, nRateCats,
+			      0, 0, -1e20, nni_stats, NULL, NULL);
 	  }
 	}
-	nni_stats = FreeNNIStats(nni_stats, NJ);	
+	nni_stats = FreeNNIStats(nni_stats, NJ);
 
 	/* This does not take long and improves the results */
 	if (MLnniToDo > 0) {
@@ -2421,15 +2663,21 @@ int main(int argc, char **argv) {
 	    if (verbose)
 	      fprintf(stderr, "Optimize all lengths: LogLk %s= %.3f Time %.2f\n",
 		      exactML || nCodes != 20 ? "" : "~",
-		      loglk, 
+		      loglk,
 		      clockDiff(&clock_start));
 	    if (fpLog) {
 	      fprintf(fpLog, "TreeLogLk\tML_Lengths%d\t%.4f\n", 2, loglk);
 	      fflush(fpLog);
 	    }
 	  }
+
+	  if (checkpointFile)
+	    WriteCheckpoint(checkpointFile, CKPT_AFTER_ML_FINAL_OPT, NJ,
+			    0, nniToDo, 0, spr, MLnniToDo, 0, -1e20,
+			    0, bUseGtrFreq, gtrfreq, nRateCats, 0, 0, -1e20, NULL, NULL, NULL);
 	}
 
+      ckpt_after_ml_final_opt:
 	/* Count bad splits and compute SH-like supports if desired */
 	if ((MLnniToDo > 0 && !fastest) || nBootstrap > 0)
 	  TestSplitsML(NJ, /*OUT*/&splitcount, nBootstrap);
@@ -2451,6 +2699,7 @@ int main(int argc, char **argv) {
 	if (nBootstrap > 0)
 	  ReliabilityNJ(NJ, nBootstrap);
       }
+      ckpt = NULL; /* done with checkpoint data */
 
       for (i = 0; i < nFPs; i++) {
 	FILE *fp = fps[i];
@@ -3535,6 +3784,399 @@ void ReadTree(/*IN/OUT*/NJ_t *NJ,
       SetProfile(/*IN/OUT*/NJ, node, /*noweight*/-1.0);
   }
   traversal = FreeTraversal(traversal,NJ);
+}
+
+/* Checkpoint save: writes binary checkpoint file atomically */
+void WriteCheckpoint(const char *filename, checkpoint_phase_t phase,
+		     NJ_t *NJ,
+		     int iRound, int nniToDo, int sprRemaining, int spr,
+		     int MLnniToDo, int bConverged, double lastloglk,
+		     int resetGtr, int bUseGtrFreq, double *gtrfreq,
+		     int nRateCats,
+		     int iMLlenRound, int iMLlenMaxRound, double dMLlenLastLogLk,
+		     nni_stats_t *nni_stats,
+		     double *gtr_rates, double *gtr_freq) {
+  char tmpname[4096];
+  snprintf(tmpname, sizeof(tmpname), "%s.tmp", filename);
+  FILE *fp = fopen(tmpname, "wb");
+  if (fp == NULL) {
+    fprintf(stderr, "Cannot write checkpoint to %s\n", tmpname);
+    return;
+  }
+
+  /* Header */
+  uint32_t magic = CKPT_MAGIC;
+  uint32_t version = CKPT_VERSION;
+  uint32_t sz_numeric = sizeof(numeric_t);
+  int32_t nc = nCodes;
+  fwrite(&magic, sizeof(uint32_t), 1, fp);
+  fwrite(&version, sizeof(uint32_t), 1, fp);
+  fwrite(&sz_numeric, sizeof(uint32_t), 1, fp);
+  fwrite(&nc, sizeof(int32_t), 1, fp);
+
+  /* Phase state */
+  int32_t ph = (int32_t)phase;
+  int32_t ir = iRound, ntd = nniToDo, sr = sprRemaining, sp = spr;
+  int32_t mntd = MLnniToDo, bc = bConverged;
+  int32_t rg = resetGtr, bugf = bUseGtrFreq;
+  int32_t nrc = nRateCats;
+  int32_t imlr = iMLlenRound, imlmr = iMLlenMaxRound;
+  fwrite(&ph, sizeof(int32_t), 1, fp);
+  fwrite(&ir, sizeof(int32_t), 1, fp);
+  fwrite(&ntd, sizeof(int32_t), 1, fp);
+  fwrite(&sr, sizeof(int32_t), 1, fp);
+  fwrite(&sp, sizeof(int32_t), 1, fp);
+  fwrite(&mntd, sizeof(int32_t), 1, fp);
+  fwrite(&bc, sizeof(int32_t), 1, fp);
+  fwrite(&lastloglk, sizeof(double), 1, fp);
+  fwrite(&rg, sizeof(int32_t), 1, fp);
+  fwrite(&bugf, sizeof(int32_t), 1, fp);
+  if (gtrfreq)
+    fwrite(gtrfreq, sizeof(double), 4, fp);
+  else {
+    double zeros[4] = {0,0,0,0};
+    fwrite(zeros, sizeof(double), 4, fp);
+  }
+  fwrite(&nrc, sizeof(int32_t), 1, fp);
+  fwrite(&imlr, sizeof(int32_t), 1, fp);
+  fwrite(&imlmr, sizeof(int32_t), 1, fp);
+  fwrite(&dMLlenLastLogLk, sizeof(double), 1, fp);
+
+  /* Tree topology */
+  int32_t nSeq = NJ->nSeq, nPos = NJ->nPos, maxnode = NJ->maxnode;
+  int32_t maxnodes = NJ->maxnodes, root = NJ->root;
+  fwrite(&nSeq, sizeof(int32_t), 1, fp);
+  fwrite(&nPos, sizeof(int32_t), 1, fp);
+  fwrite(&maxnode, sizeof(int32_t), 1, fp);
+  fwrite(&maxnodes, sizeof(int32_t), 1, fp);
+  fwrite(&root, sizeof(int32_t), 1, fp);
+  fwrite(NJ->parent, sizeof(int), maxnodes, fp);
+  /* children: nChild + 3 ints per node */
+  int i;
+  for (i = 0; i < maxnodes; i++) {
+    int32_t nc2 = NJ->child[i].nChild;
+    int32_t c0 = NJ->child[i].child[0];
+    int32_t c1 = NJ->child[i].child[1];
+    int32_t c2 = NJ->child[i].child[2];
+    fwrite(&nc2, sizeof(int32_t), 1, fp);
+    fwrite(&c0, sizeof(int32_t), 1, fp);
+    fwrite(&c1, sizeof(int32_t), 1, fp);
+    fwrite(&c2, sizeof(int32_t), 1, fp);
+  }
+  fwrite(NJ->branchlength, sizeof(numeric_t), maxnodes, fp);
+  fwrite(NJ->support, sizeof(numeric_t), maxnodes, fp);
+
+  /* Rates */
+  int32_t nRateCats2 = NJ->rates.nRateCategories;
+  fwrite(&nRateCats2, sizeof(int32_t), 1, fp);
+  if (nRateCats2 > 0) {
+    fwrite(NJ->rates.rates, sizeof(numeric_t), nRateCats2, fp);
+    fwrite(NJ->rates.ratecat, sizeof(unsigned int), nPos, fp);
+  }
+
+  /* NNI stats */
+  int32_t has_nni = (nni_stats != NULL) ? 1 : 0;
+  fwrite(&has_nni, sizeof(int32_t), 1, fp);
+  if (has_nni) {
+    for (i = 0; i < maxnode; i++) {
+      int32_t age = nni_stats[i].age;
+      int32_t sage = nni_stats[i].subtreeAge;
+      double delta = nni_stats[i].delta;
+      double support = nni_stats[i].support;
+      fwrite(&age, sizeof(int32_t), 1, fp);
+      fwrite(&sage, sizeof(int32_t), 1, fp);
+      fwrite(&delta, sizeof(double), 1, fp);
+      fwrite(&support, sizeof(double), 1, fp);
+    }
+  }
+
+  /* GTR parameters if re-estimated */
+  int32_t has_gtr = (gtr_rates != NULL && gtr_freq != NULL) ? 1 : 0;
+  fwrite(&has_gtr, sizeof(int32_t), 1, fp);
+  if (has_gtr) {
+    fwrite(gtr_rates, sizeof(double), 6, fp);
+    fwrite(gtr_freq, sizeof(double), 4, fp);
+  }
+
+  /* Save all internal node profiles for exact reproduction */
+  int32_t nProfiles = maxnode - nSeq;
+  fwrite(&nProfiles, sizeof(int32_t), 1, fp);
+  for (i = NJ->nSeq; i < maxnode; i++) {
+    profile_t *p = NJ->profiles[i];
+    if (p == NULL) {
+      int32_t exists = 0;
+      fwrite(&exists, sizeof(int32_t), 1, fp);
+      continue;
+    }
+    int32_t exists = 1;
+    fwrite(&exists, sizeof(int32_t), 1, fp);
+    fwrite(p->weights, sizeof(numeric_t), NJ->nPos, fp);
+    fwrite(p->codes, sizeof(unsigned char), NJ->nPos, fp);
+    int32_t nv = p->nVectors;
+    fwrite(&nv, sizeof(int32_t), 1, fp);
+    if (nv > 0)
+      fwrite(p->vectors, sizeof(numeric_t), nCodes * nv, fp);
+    int32_t has_codeDist = (p->codeDist != NULL) ? 1 : 0;
+    fwrite(&has_codeDist, sizeof(int32_t), 1, fp);
+    if (has_codeDist)
+      fwrite(p->codeDist, sizeof(numeric_t), nCodes * NJ->nPos, fp);
+    if (NJ->nConstraints > 0) {
+      fwrite(p->nOn, sizeof(int), NJ->nConstraints, fp);
+      fwrite(p->nOff, sizeof(int), NJ->nConstraints, fp);
+    }
+  }
+
+  /* Save outprofile */
+  {
+    profile_t *p = NJ->outprofile;
+    fwrite(p->weights, sizeof(numeric_t), NJ->nPos, fp);
+    fwrite(p->codes, sizeof(unsigned char), NJ->nPos, fp);
+    int32_t nv = p->nVectors;
+    fwrite(&nv, sizeof(int32_t), 1, fp);
+    if (nv > 0)
+      fwrite(p->vectors, sizeof(numeric_t), nCodes * nv, fp);
+    int32_t has_codeDist = (p->codeDist != NULL) ? 1 : 0;
+    fwrite(&has_codeDist, sizeof(int32_t), 1, fp);
+    if (has_codeDist)
+      fwrite(p->codeDist, sizeof(numeric_t), nCodes * NJ->nPos, fp);
+    if (NJ->nConstraints > 0) {
+      fwrite(p->nOn, sizeof(int), NJ->nConstraints, fp);
+      fwrite(p->nOff, sizeof(int), NJ->nConstraints, fp);
+    }
+  }
+
+  fflush(fp);
+  int fd = fileno(fp);
+  if (fd >= 0) fsync(fd);
+  fclose(fp);
+
+  /* Atomic rename */
+  if (rename(tmpname, filename) != 0) {
+    fprintf(stderr, "Warning: could not rename checkpoint %s to %s\n", tmpname, filename);
+  }
+
+  if (showProgress)
+    fprintf(stderr, "Checkpoint saved: phase %d round %d\n", (int)phase, iRound);
+}
+
+/* Checkpoint restore: reads binary checkpoint file and restores NJ_t state */
+checkpoint_data_t *ReadCheckpoint(const char *filename, /*IN/OUT*/NJ_t *NJ) {
+  FILE *fp = fopen(filename, "rb");
+  if (fp == NULL) {
+    fprintf(stderr, "Cannot read checkpoint file %s\n", filename);
+    exit(1);
+  }
+
+  /* Header */
+  uint32_t magic, version, sz_numeric;
+  int32_t nc;
+  fread(&magic, sizeof(uint32_t), 1, fp);
+  fread(&version, sizeof(uint32_t), 1, fp);
+  fread(&sz_numeric, sizeof(uint32_t), 1, fp);
+  fread(&nc, sizeof(int32_t), 1, fp);
+
+  if (magic != CKPT_MAGIC) {
+    fprintf(stderr, "Invalid checkpoint file (bad magic): %s\n", filename);
+    exit(1);
+  }
+  if (version != CKPT_VERSION) {
+    fprintf(stderr, "Incompatible checkpoint version %u (expected %u): %s\n", version, CKPT_VERSION, filename);
+    exit(1);
+  }
+  if (sz_numeric != sizeof(numeric_t)) {
+    fprintf(stderr, "Checkpoint uses %u-byte numeric_t but this build uses %zu: %s\n",
+	    sz_numeric, sizeof(numeric_t), filename);
+    exit(1);
+  }
+  if (nc != nCodes) {
+    fprintf(stderr, "Checkpoint uses nCodes=%d but this run uses nCodes=%d: %s\n", nc, nCodes, filename);
+    exit(1);
+  }
+
+  checkpoint_data_t *ckpt = (checkpoint_data_t*)mymalloc(sizeof(checkpoint_data_t));
+
+  /* Phase state */
+  int32_t ph, ir, ntd, sr, sp, mntd, bc, rg, bugf, nrc, imlr, imlmr;
+  fread(&ph, sizeof(int32_t), 1, fp);
+  fread(&ir, sizeof(int32_t), 1, fp);
+  fread(&ntd, sizeof(int32_t), 1, fp);
+  fread(&sr, sizeof(int32_t), 1, fp);
+  fread(&sp, sizeof(int32_t), 1, fp);
+  fread(&mntd, sizeof(int32_t), 1, fp);
+  fread(&bc, sizeof(int32_t), 1, fp);
+  fread(&ckpt->lastloglk, sizeof(double), 1, fp);
+  fread(&rg, sizeof(int32_t), 1, fp);
+  fread(&bugf, sizeof(int32_t), 1, fp);
+  fread(ckpt->gtrfreq, sizeof(double), 4, fp);
+  fread(&nrc, sizeof(int32_t), 1, fp);
+  fread(&imlr, sizeof(int32_t), 1, fp);
+  fread(&imlmr, sizeof(int32_t), 1, fp);
+  fread(&ckpt->dMLlenLastLogLk, sizeof(double), 1, fp);
+
+  ckpt->phase = (checkpoint_phase_t)ph;
+  ckpt->iRound = ir;
+  ckpt->nniToDo = ntd;
+  ckpt->sprRemaining = sr;
+  ckpt->spr = sp;
+  ckpt->MLnniToDo = mntd;
+  ckpt->bConverged = bc;
+  ckpt->resetGtr = rg;
+  ckpt->bUseGtrFreq = bugf;
+  ckpt->nRateCats = nrc;
+  ckpt->iMLlenRound = imlr;
+  ckpt->iMLlenMaxRound = imlmr;
+
+  /* Tree topology */
+  int32_t nSeq, nPos, maxnode, maxnodes, root;
+  fread(&nSeq, sizeof(int32_t), 1, fp);
+  fread(&nPos, sizeof(int32_t), 1, fp);
+  fread(&maxnode, sizeof(int32_t), 1, fp);
+  fread(&maxnodes, sizeof(int32_t), 1, fp);
+  fread(&root, sizeof(int32_t), 1, fp);
+
+  if (nSeq != NJ->nSeq || nPos != NJ->nPos) {
+    fprintf(stderr, "Checkpoint mismatch: checkpoint has %d seqs %d pos, alignment has %d seqs %d pos\n",
+	    nSeq, nPos, NJ->nSeq, NJ->nPos);
+    exit(1);
+  }
+  if (maxnodes != NJ->maxnodes) {
+    fprintf(stderr, "Checkpoint mismatch: maxnodes %d vs %d\n", maxnodes, NJ->maxnodes);
+    exit(1);
+  }
+
+  NJ->maxnode = maxnode;
+  NJ->root = root;
+  fread(NJ->parent, sizeof(int), maxnodes, fp);
+
+  int i;
+  for (i = 0; i < maxnodes; i++) {
+    int32_t nc2, c0, c1, c2;
+    fread(&nc2, sizeof(int32_t), 1, fp);
+    fread(&c0, sizeof(int32_t), 1, fp);
+    fread(&c1, sizeof(int32_t), 1, fp);
+    fread(&c2, sizeof(int32_t), 1, fp);
+    NJ->child[i].nChild = nc2;
+    NJ->child[i].child[0] = c0;
+    NJ->child[i].child[1] = c1;
+    NJ->child[i].child[2] = c2;
+  }
+  fread(NJ->branchlength, sizeof(numeric_t), maxnodes, fp);
+  fread(NJ->support, sizeof(numeric_t), maxnodes, fp);
+
+  /* Rates */
+  int32_t nRateCats2;
+  fread(&nRateCats2, sizeof(int32_t), 1, fp);
+  AllocRateCategories(&NJ->rates, nRateCats2, NJ->nPos);
+  if (nRateCats2 > 0) {
+    fread(NJ->rates.rates, sizeof(numeric_t), nRateCats2, fp);
+    fread(NJ->rates.ratecat, sizeof(unsigned int), NJ->nPos, fp);
+  }
+
+  /* NNI stats */
+  int32_t has_nni;
+  fread(&has_nni, sizeof(int32_t), 1, fp);
+  if (has_nni) {
+    ckpt->nni_stats = (nni_stats_t*)mymalloc(sizeof(nni_stats_t) * maxnode);
+    for (i = 0; i < maxnode; i++) {
+      int32_t age, sage;
+      double delta, support;
+      fread(&age, sizeof(int32_t), 1, fp);
+      fread(&sage, sizeof(int32_t), 1, fp);
+      fread(&delta, sizeof(double), 1, fp);
+      fread(&support, sizeof(double), 1, fp);
+      ckpt->nni_stats[i].age = age;
+      ckpt->nni_stats[i].subtreeAge = sage;
+      ckpt->nni_stats[i].delta = delta;
+      ckpt->nni_stats[i].support = support;
+    }
+  } else {
+    ckpt->nni_stats = NULL;
+  }
+
+  /* GTR parameters */
+  int32_t has_gtr;
+  fread(&has_gtr, sizeof(int32_t), 1, fp);
+  ckpt->has_gtr_reset = has_gtr;
+  if (has_gtr) {
+    fread(ckpt->gtr_rates, sizeof(double), 6, fp);
+    fread(ckpt->gtr_freq, sizeof(double), 4, fp);
+  }
+
+  /* Restore internal node profiles */
+  int32_t nProfiles;
+  fread(&nProfiles, sizeof(int32_t), 1, fp);
+  for (i = NJ->nSeq; i < NJ->nSeq + nProfiles; i++) {
+    int32_t exists;
+    fread(&exists, sizeof(int32_t), 1, fp);
+    if (!exists) {
+      if (NJ->profiles[i] != NULL)
+	NJ->profiles[i] = FreeProfile(NJ->profiles[i], NJ->nPos, NJ->nConstraints);
+      continue;
+    }
+    if (NJ->profiles[i] != NULL)
+      NJ->profiles[i] = FreeProfile(NJ->profiles[i], NJ->nPos, NJ->nConstraints);
+    NJ->profiles[i] = NewProfile(NJ->nPos, NJ->nConstraints);
+    profile_t *p = NJ->profiles[i];
+    fread(p->weights, sizeof(numeric_t), NJ->nPos, fp);
+    fread(p->codes, sizeof(unsigned char), NJ->nPos, fp);
+    int32_t nv;
+    fread(&nv, sizeof(int32_t), 1, fp);
+    p->nVectors = nv;
+    if (nv > 0) {
+      p->vectors = (numeric_t*)mymalloc(sizeof(numeric_t) * nCodes * nv);
+      fread(p->vectors, sizeof(numeric_t), nCodes * nv, fp);
+    }
+    int32_t has_codeDist;
+    fread(&has_codeDist, sizeof(int32_t), 1, fp);
+    if (has_codeDist) {
+      p->codeDist = (numeric_t*)mymalloc(sizeof(numeric_t) * nCodes * NJ->nPos);
+      fread(p->codeDist, sizeof(numeric_t), nCodes * NJ->nPos, fp);
+    }
+    if (NJ->nConstraints > 0) {
+      fread(p->nOn, sizeof(int), NJ->nConstraints, fp);
+      fread(p->nOff, sizeof(int), NJ->nConstraints, fp);
+    }
+  }
+
+  /* Restore outprofile */
+  {
+    profile_t *p = NJ->outprofile;
+    /* Free existing outprofile vectors if any */
+    if (p->vectors != NULL) {
+      myfree(p->vectors, sizeof(numeric_t) * nCodes * p->nVectors);
+      p->vectors = NULL;
+    }
+    if (p->codeDist != NULL) {
+      myfree(p->codeDist, sizeof(numeric_t) * nCodes * NJ->nPos);
+      p->codeDist = NULL;
+    }
+    fread(p->weights, sizeof(numeric_t), NJ->nPos, fp);
+    fread(p->codes, sizeof(unsigned char), NJ->nPos, fp);
+    int32_t nv;
+    fread(&nv, sizeof(int32_t), 1, fp);
+    p->nVectors = nv;
+    if (nv > 0) {
+      p->vectors = (numeric_t*)mymalloc(sizeof(numeric_t) * nCodes * nv);
+      fread(p->vectors, sizeof(numeric_t), nCodes * nv, fp);
+    }
+    int32_t has_codeDist;
+    fread(&has_codeDist, sizeof(int32_t), 1, fp);
+    if (has_codeDist) {
+      p->codeDist = (numeric_t*)mymalloc(sizeof(numeric_t) * nCodes * NJ->nPos);
+      fread(p->codeDist, sizeof(numeric_t), nCodes * NJ->nPos, fp);
+    }
+    if (NJ->nConstraints > 0) {
+      fread(p->nOn, sizeof(int), NJ->nConstraints, fp);
+      fread(p->nOff, sizeof(int), NJ->nConstraints, fp);
+    }
+  }
+
+  fclose(fp);
+
+  if (showProgress)
+    fprintf(stderr, "Checkpoint loaded: phase %d round %d\n", (int)ckpt->phase, ckpt->iRound);
+
+  return ckpt;
 }
 
 /* Print topology using node indices as node names */
