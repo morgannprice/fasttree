@@ -316,6 +316,9 @@ Similarly, the local supports take O(N L a<sup>2</sup>) time and O(N L a ) space
 In practice, the maximum likelihood NNIs are usually the <A HREF="#faster">slowest step</A>.
 </P>
 
+<P>If you are analyzing very large alignments, and you are concerned that your jobs will run for too long, you can run FastTree separately for each phase (although running just one ML NNI at a time might not be efficient), you can use the -log option to save intermediate trees, or you can try a version with
+<A HREF="https://github.com/morgannprice/fasttree/pull/3">checkpointing</A>. (If you use the -log option to save intermediate trees -- the trees are on tab-delimited lines with NJ, ME_NNI, ME_SPR, ME_lengths, ML_Lengths, or ML_NNI as the first field and the tree as the last field; you'd need to extract the relevant tree to a separate file and restart FastTree at the appropriate phase with the -intree option to set the starting tree.)
+
 <H3><A NAME="Accuracy">Accuracy</A></H3>
 
 <P>FastTree is slightly more accurate than PhyML3 with NNI moves
